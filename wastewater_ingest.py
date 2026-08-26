@@ -16,9 +16,14 @@ Requirements: pip install requests pandas
 """
 
 import io
+import logging
 import requests
 import pandas as pd
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+_log = logging.getLogger(__name__)
+
+_HEADERS = {"User-Agent": "wastewater-ingest/1.0 (public data pipeline)"}
 
 CANONICAL_FIELDS = [
     "site_id",
@@ -38,14 +43,14 @@ CANONICAL_FIELDS = [
 # Every source spells the same thing differently. Normalize once,
 # here, so the mapping dicts stay declarative.
 
-def iso_date(value):
+def iso_date(value) -> str | None:
     """Coerce any source date into ISO YYYY-MM-DD. CDC ships ISO already;
     CA ships MM/DD/YYYY. Returns None on unparseable input."""
     ts = pd.to_datetime(value, errors="coerce")
     return None if pd.isna(ts) else ts.strftime("%Y-%m-%d")
 
 
-def clean_unit(value):
+def clean_unit(value) -> str | None:
     """CA mixes 'copies/l wastewater' and 'copies/L wastewater' (same
     unit, different case) plus 'copies/g dry sludge' (NOT the same unit
     -- liquid vs solids matrix, do not compare naively)."""
@@ -54,7 +59,7 @@ def clean_unit(value):
     return value.strip().lower()
 
 
-def to_float(value):
+def to_float(value) -> float | None:
     return pd.to_numeric(value, errors="coerce")
 
 
@@ -72,7 +77,7 @@ CA_CSV_URL = (
 )
 
 
-def _fetch_cdc_site_metadata(key_plot_ids, chunk_size=50):
+def _fetch_cdc_site_metadata(key_plot_ids, chunk_size: int = 50) -> pd.DataFrame:
     """Look up site attributes for a set of key_plot_ids.
 
     The concentration dataset carries ONLY (key_plot_id, date,
@@ -80,13 +85,17 @@ def _fetch_cdc_site_metadata(key_plot_ids, chunk_size=50):
     live in the separate metric dataset, so the canonical schema can
     only be filled by joining the two. Site attributes are static per
     key_plot_id, so we $group to get one row each.
+
+    Failed chunks are logged and skipped rather than aborting the whole
+    metadata fetch, so a transient API error on one batch doesn't lose
+    all metadata.
     """
     ids = sorted({k for k in key_plot_ids if isinstance(k, str)})
     fields = "key_plot_id,wwtp_id,reporting_jurisdiction,county_names,population_served"
     frames = []
 
     for start in range(0, len(ids), chunk_size):
-        chunk = ids[start:start + chunk_size]
+        chunk = ids[start : start + chunk_size]
         quoted = ",".join("'" + k.replace("'", "''") + "'" for k in chunk)
         params = {
             "$select": fields,
@@ -94,23 +103,26 @@ def _fetch_cdc_site_metadata(key_plot_ids, chunk_size=50):
             "$where": "key_plot_id in({})".format(quoted),
             "$limit": chunk_size,
         }
-        resp = requests.get(CDC_META_URL, params=params, timeout=60)
-        resp.raise_for_status()
-        frames.append(pd.DataFrame(resp.json()))
+        try:
+            resp = requests.get(CDC_META_URL, params=params, headers=_HEADERS, timeout=60)
+            resp.raise_for_status()
+            frames.append(pd.DataFrame(resp.json()))
+        except requests.RequestException as exc:
+            _log.warning("CDC metadata chunk %d–%d failed: %s", start, start + chunk_size, exc)
 
     if not frames:
         return pd.DataFrame(columns=fields.split(","))
     return pd.concat(frames, ignore_index=True)
 
 
-def fetch_cdc_nwss(limit=1000):
+def fetch_cdc_nwss(limit: int = 1000) -> pd.DataFrame:
     """CDC NWSS public wastewater data, via the Socrata API.
 
     Returns concentration rows enriched with site metadata. The join is
     on key_plot_id; the concentration table's `date` corresponds to the
     metric table's `date_end` (the close of its 15-day window).
     """
-    resp = requests.get(CDC_CONC_URL, params={"$limit": limit}, timeout=60)
+    resp = requests.get(CDC_CONC_URL, params={"$limit": limit}, headers=_HEADERS, timeout=60)
     resp.raise_for_status()
     conc = pd.DataFrame(resp.json())
     if conc.empty:
@@ -120,7 +132,7 @@ def fetch_cdc_nwss(limit=1000):
     return conc.merge(meta, on="key_plot_id", how="left")
 
 
-def fetch_ca_chhs(limit=1000, target="sars-cov-2"):
+def fetch_ca_chhs(limit: int = 1000, target: str | None = "sars-cov-2") -> pd.DataFrame:
     """CDPH Wastewater Surveillance Data, California.
 
     The full CSV is ~430 MB, so we stream it and stop after `limit`
@@ -130,7 +142,7 @@ def fetch_ca_chhs(limit=1000, target="sars-cov-2"):
     fluav h1/h3/h5, ...), so a target filter is required -- otherwise
     you silently mix influenza rows into a COVID comparison.
     """
-    resp = requests.get(CA_CSV_URL, stream=True, timeout=180)
+    resp = requests.get(CA_CSV_URL, stream=True, headers=_HEADERS, timeout=180)
     resp.raise_for_status()
     resp.raw.decode_content = True
 
@@ -147,7 +159,7 @@ def fetch_ca_chhs(limit=1000, target="sars-cov-2"):
                 chunk = chunk[
                     chunk["pcr_target"].astype(str).str.strip().str.lower() == target
                 ]
-            # Drop rows already covered by CDC_NWSS to avoid double-counting
+            # Drop rows also covered by CDC_NWSS to avoid double-counting
             chunk = chunk[
                 chunk["data_source"] != "CDC NWSS Commercial Contract (Verily)"
             ]
@@ -207,56 +219,81 @@ CA_CHHS_MAPPING = {
 }
 
 
-def apply_mapping(raw_df, mapping):
+def apply_mapping(raw_df: pd.DataFrame, mapping: dict) -> pd.DataFrame:
     """Turn a raw DataFrame into canonical-schema rows using a mapping dict."""
     if raw_df.empty:
         return pd.DataFrame(columns=CANONICAL_FIELDS)
-    records = []
-    for _, row in raw_df.iterrows():
-        records.append({field: fn(row) for field, fn in mapping.items()})
-    return pd.DataFrame(records, columns=CANONICAL_FIELDS)
+    data = {field: raw_df.apply(fn, axis=1) for field, fn in mapping.items()}
+    return pd.DataFrame(data, columns=CANONICAL_FIELDS)
 
 
 # ---------------------------------------------------------------
 # STEP 3: Combine sources into one standardized table
 # ---------------------------------------------------------------
 
-def report_overlap(raw_ca):
+def report_overlap(raw_ca: pd.DataFrame) -> None:
     """CA's own `data_source` column shows most of its rows originate
     from 'CDC NWSS Commercial Contract (Verily)' -- the SAME lab feed
     behind the CDC national dataset. Concatenating both sources will
-    double-count those sites. Print the split so the caller can decide.
+    double-count those sites. Log the split so the caller can decide.
     """
     if raw_ca.empty or "data_source" not in raw_ca.columns:
         return
-    print("\nCA row provenance (overlap check):")
+    _log.info("CA row provenance (overlap check):")
     for program, n in raw_ca["data_source"].value_counts().items():
-        print("  {:>6}  {}".format(n, program))
-    print("  ^ rows from the CDC/Verily contract also appear in CDC_NWSS.")
+        _log.info("  %6d  %s", n, program)
+    _log.info("  ^ rows from the CDC/Verily contract also appear in CDC_NWSS.")
 
 
-def build_combined_dataset(cdc_limit=500, ca_limit=2000):
-    cdc_raw = fetch_cdc_nwss(limit=cdc_limit)
-    cdc_canonical = apply_mapping(cdc_raw, CDC_NWSS_MAPPING)
+def build_combined_dataset(
+    cdc_limit: int = 500, ca_limit: int = 2000
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fetch and combine CDC and CA data, tolerating individual source failures."""
+    parts = []
+    ca_raw = pd.DataFrame()
 
-    # No target filter -- pull all pathogens (sars-cov-2, flu a/b, rsv, norovirus, etc.)
-    # Higher limit so we get meaningful coverage across all 8 pathogen types
-    ca_raw = fetch_ca_chhs(limit=ca_limit, target=None)
-    ca_canonical = apply_mapping(ca_raw, CA_CHHS_MAPPING)
+    try:
+        cdc_raw = fetch_cdc_nwss(limit=cdc_limit)
+        parts.append(apply_mapping(cdc_raw, CDC_NWSS_MAPPING))
+    except requests.RequestException as exc:
+        _log.error("CDC fetch failed, continuing without it: %s", exc)
 
-    combined = pd.concat([cdc_canonical, ca_canonical], ignore_index=True)
+    try:
+        ca_raw = fetch_ca_chhs(limit=ca_limit, target=None)
+        parts.append(apply_mapping(ca_raw, CA_CHHS_MAPPING))
+    except requests.RequestException as exc:
+        _log.error("CA fetch failed, continuing without it: %s", exc)
+
+    combined = (
+        pd.concat(parts, ignore_index=True)
+        if parts
+        else pd.DataFrame(columns=CANONICAL_FIELDS)
+    )
     return combined, ca_raw
 
 
-def inspect_sources():
+def inspect_sources() -> None:
     """Print each source's real column names. Run this when a mapping
     breaks -- it is how the mappings above were derived."""
-    cdc = requests.get(CDC_CONC_URL, params={"$limit": 1}, timeout=60).json()
-    meta = requests.get(CDC_META_URL, params={"$limit": 1}, timeout=60).json()
-    print("CDC concentration columns:", sorted(cdc[0].keys()))
-    print("CDC metric columns:      ", sorted(meta[0].keys()))
-    ca = fetch_ca_chhs(limit=1, target=None)
-    print("CA columns:              ", sorted(ca.columns))
+    try:
+        cdc = requests.get(CDC_CONC_URL, params={"$limit": 1}, headers=_HEADERS, timeout=60).json()
+        meta = requests.get(CDC_META_URL, params={"$limit": 1}, headers=_HEADERS, timeout=60).json()
+        if cdc:
+            print("CDC concentration columns:", sorted(cdc[0].keys()))
+        else:
+            _log.warning("CDC concentration endpoint returned no rows")
+        if meta:
+            print("CDC metric columns:      ", sorted(meta[0].keys()))
+        else:
+            _log.warning("CDC metric endpoint returned no rows")
+    except requests.RequestException as exc:
+        _log.error("CDC inspect failed: %s", exc)
+
+    try:
+        ca = fetch_ca_chhs(limit=1, target=None)
+        print("CA columns:              ", sorted(ca.columns))
+    except requests.RequestException as exc:
+        _log.error("CA inspect failed: %s", exc)
 
 
 if __name__ == "__main__":

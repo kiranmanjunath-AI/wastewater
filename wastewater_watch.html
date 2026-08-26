@@ -328,7 +328,6 @@ function statusLabel(pct, dateStr) {
 
 /* === TOOLTIP === */
 const tip = document.getElementById('tip');
-let tipVisible = false;
 function showTip(cx, cy, label, value) {
   while (tip.firstChild) tip.removeChild(tip.firstChild);
   const strong = document.createElement('strong');
@@ -337,13 +336,12 @@ function showTip(cx, cy, label, value) {
   tip.appendChild(document.createElement('br'));
   tip.appendChild(document.createTextNode(value));
   tip.style.opacity = '1';
-  tipVisible = true;
   const tx = Math.min(cx + 14, window.innerWidth - tip.offsetWidth - 6);
   const ty = Math.max(cy - tip.offsetHeight - 10, 6);
   tip.style.left = tx + 'px';
   tip.style.top  = ty + 'px';
 }
-function hideTip() { tip.style.opacity = '0'; tipVisible = false; }
+function hideTip() { tip.style.opacity = '0'; }
 
 /* === CHART ENGINE === */
 function buildChart(svg, pts, { W=820, H=265, pT=50, pR=24, pB=42, pL=64,
@@ -355,8 +353,9 @@ function buildChart(svg, pts, { W=820, H=265, pT=50, pR=24, pB=42, pL=64,
 
   const ts  = pts.map(p => new Date(p.date + 'T12:00:00').getTime());
   const vs  = pts.map(p => p.value !== undefined ? p.value : p.pct);
-  const t0  = Math.min(...ts), t1 = Math.max(...ts);
-  const vMax = Math.max(...vs) * 1.1;
+  const t0  = ts.reduce((a, b) => Math.min(a, b));
+  const t1  = ts.reduce((a, b) => Math.max(a, b));
+  const vMax = vs.reduce((a, b) => Math.max(a, b)) * 1.1;
 
   const xS = t => pL + (t - t0) / (t1 - t0) * iW;
   const yS = v => pT + iH * (1 - v / vMax);
@@ -387,8 +386,8 @@ function buildChart(svg, pts, { W=820, H=265, pT=50, pR=24, pB=42, pL=64,
     svg.appendChild(yt);
   }
 
-  /* computed points */
-  const cpts = pts.map((p, i) => ({ x: xS(ts[i]), y: yS(vs[i]), raw: p }));
+  /* computed points — carry pre-computed timestamp to avoid Date construction in inner loops */
+  const cpts = pts.map((p, i) => ({ x: xS(ts[i]), y: yS(vs[i]), t: ts[i], raw: p }));
 
   /* area */
   const aD = `M${cpts[0].x},${pT+iH} ` + cpts.map(p=>`L${p.x},${p.y}`).join(' ') + ` L${cpts[cpts.length-1].x},${pT+iH}Z`;
@@ -403,7 +402,7 @@ function buildChart(svg, pts, { W=820, H=265, pT=50, pR=24, pB=42, pL=64,
   for (const ann of annos) {
     const at = new Date(ann.date + 'T12:00:00').getTime();
     let near = cpts[0], nd = Infinity;
-    cpts.forEach(p => { const d = Math.abs(new Date(p.raw.date+'T12:00:00').getTime()-at); if(d<nd){nd=d;near=p;} });
+    cpts.forEach(p => { const d = Math.abs(p.t - at); if(d<nd){nd=d;near=p;} });
     const lx = near.x + (ann.dx||0);
     const ly = near.y - 26;
     svg.appendChild(svgEl('line', { x1:near.x, x2:near.x, y1:near.y-5, y2:near.y-18,
@@ -430,10 +429,10 @@ function buildChart(svg, pts, { W=820, H=265, pT=50, pR=24, pB=42, pL=64,
     hLine.setAttribute('x1', near.x); hLine.setAttribute('x2', near.x); hLine.setAttribute('visibility','visible');
     hDot.setAttribute('cx', near.x);  hDot.setAttribute('cy', near.y);  hDot.setAttribute('visibility','visible');
     const t = tipFmt(near.raw); showTip(e.clientX, e.clientY, t.label, t.value);
-  });
+  }, { passive: true });
   hit.addEventListener('mouseleave', () => {
     hLine.setAttribute('visibility','hidden'); hDot.setAttribute('visibility','hidden'); hideTip();
-  });
+  }, { passive: true });
 }
 
 /* === RENDER COVID === */
