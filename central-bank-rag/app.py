@@ -134,37 +134,35 @@ with st.sidebar:
     st.caption("Fed · Bank of Canada · Jan 2025 – Sep 2026")
     st.divider()
 
-    # ── Filters ──
-    st.markdown("### Filters")
+    # ── Filters (optional — collapsed by default) ──
+    with st.expander("Filters", expanded=False):
+        institution_choice = st.radio(
+            "Institution",
+            ["All", "Federal Reserve", "Bank of Canada"],
+            horizontal=True,
+        )
 
-    institution_choice = st.radio(
-        "Institution",
-        ["All", "Federal Reserve", "Bank of Canada"],
-        horizontal=True,
-    )
+        doc_type_choice = st.selectbox(
+            "Document type",
+            ["All"] + ALL_DOC_TYPES,
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            date_from = st.date_input(
+                "From", value=date(2025, 1, 1),
+                min_value=date(2025, 1, 1), max_value=date(2026, 9, 30),
+            )
+        with col2:
+            date_to = st.date_input(
+                "To", value=date(2026, 9, 30),
+                min_value=date(2025, 1, 1), max_value=date(2026, 9, 30),
+            )
+
+        top_n = st.slider("Sources per answer", min_value=1, max_value=15, value=6)
+
     institution_filter = None if institution_choice == "All" else institution_choice
-
-    doc_type_choice = st.selectbox(
-        "Document type",
-        ["All"] + ALL_DOC_TYPES,
-    )
-    doc_type_filter = None if doc_type_choice == "All" else doc_type_choice
-
-    col1, col2 = st.columns(2)
-    with col1:
-        date_from = st.date_input(
-            "From", value=date(2025, 1, 1),
-            min_value=date(2025, 1, 1), max_value=date(2026, 9, 30),
-            label_visibility="visible",
-        )
-    with col2:
-        date_to = st.date_input(
-            "To", value=date(2026, 9, 30),
-            min_value=date(2025, 1, 1), max_value=date(2026, 9, 30),
-            label_visibility="visible",
-        )
-
-    top_n = st.slider("Sources per answer", min_value=3, max_value=10, value=6)
+    doc_type_filter    = None if doc_type_choice == "All" else doc_type_choice
 
     st.divider()
 
@@ -175,7 +173,7 @@ with st.sidebar:
             st.session_state["_draft"] = q
 
     st.divider()
-    if st.button("🗑 Clear conversation", use_container_width=True):
+    if st.button("Clear conversation", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
