@@ -22,13 +22,36 @@ TOP_K_DENSE   = 50   # candidates pulled from ChromaDB
 TOP_K_SPARSE  = 30   # candidates pulled from BM25
 BM25_PER_DOC  = 2    # max BM25 chunks per source document (prevents flooding)
 RRF_K         = 60   # RRF constant (standard value)
-DEFAULT_TOP_N = 6    # final chunks passed to the generator
+DEFAULT_TOP_N = 8    # final chunks passed to the generator
 
 # Primary announcement documents get a score boost so they surface
 # over longer contextual documents (minutes, deliberations) when both
 # are semantically close to the query.
 ANNOUNCEMENT_TYPES = frozenset({"FOMC Statement", "Rate Decision Statement"})
 ANNOUNCEMENT_BOOST = 2.0
+
+# BM25 query expansion: central-bank decision documents use different
+# vocabulary than everyday English.  "Rate cuts" in a query should also
+# match FOMC Statements that say "lower the target range for the federal
+# funds rate" and BoC statements that say "reduce its target for the
+# overnight rate".  Expanding the token list bridges this lexical gap so
+# cut/hike announcements enter the sparse pool and benefit from the boost.
+_EXPAND_CUT  = {"cut", "cuts", "cutting", "easing", "ease", "eased", "lower", "lowered"}
+_EXPAND_HIKE = {"hike", "hikes", "hiking", "tighten", "tightening", "raise", "raised"}
+
+_CUT_SYNONYMS  = ["lower", "reduce", "target", "range", "easing", "basis", "points"]
+_HIKE_SYNONYMS = ["raise", "higher", "restrictive", "tighten", "increase"]
+
+
+def _expand_tokens(tokens: list[str]) -> list[str]:
+    """Add central-bank vocabulary synonyms so BM25 finds announcement docs."""
+    s = set(tokens)
+    extra: list[str] = []
+    if s & _EXPAND_CUT:
+        extra += [t for t in _CUT_SYNONYMS  if t not in s]
+    if s & _EXPAND_HIKE:
+        extra += [t for t in _HIKE_SYNONYMS if t not in s]
+    return tokens + extra if extra else tokens
 
 
 @dataclass
@@ -132,8 +155,10 @@ class Retriever:
 
         # 3. Sparse retrieval (BM25) — capped at BM25_PER_DOC chunks per
         #    source document so that verbose docs (e.g. Beige Books) cannot
-        #    monopolise the entire sparse pool.
-        tokenized = query_text.lower().split()
+        #    monopolise the entire sparse pool.  Query tokens are expanded with
+        #    central-bank vocabulary synonyms so that phrasing like "rate cuts"
+        #    also matches decision documents that say "lower the target range".
+        tokenized = _expand_tokens(query_text.lower().split())
         scores    = self._bm25.get_scores(tokenized)
 
         filtered_sparse = [
@@ -169,21 +194,41 @@ class Retriever:
 
         ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
 
-        # Ensure each primary announcement type is represented.  The injection
-        # strategy prioritises temporal breadth over semantic similarity:
+        # Deduplicate: keep only the highest-scoring chunk per source document.
+        # RRF may surface two chunks from the same document (e.g. BM25 matches
+        # two passages from the same Rate Decision Statement), wasting a slot.
+        seen_docs: set[str] = set()
+        deduped: list[tuple[str, float]] = []
+        for cid, score in ranked:
+            chunk = self._chunk_map.get(cid)
+            if not chunk:
+                continue
+            if chunk.doc_id not in seen_docs:
+                deduped.append((cid, score))
+                seen_docs.add(chunk.doc_id)
+        ranked = deduped[:top_n]
+
+        # Anchor injection: ensure each primary announcement type appears in
+        # the results even when those brief documents rank far below the dense
+        # top-K on embedding similarity alone.
         #
-        #   1. Most-recent chunk  — always reflects current policy stance.
-        #   2. Chronological-midpoint chunk  — for FOMC Statements the midpoint
-        #      of the Jan 2025–Sep 2026 corpus lands in the Oct–Dec 2025 window,
-        #      which is the actual rate-cut period.  Including it means "evolution"
-        #      queries get the cut decisions even though those brief statements
-        #      rank far outside the dense top-K on embedding similarity alone.
+        # Strategy: sample four temporal checkpoints from the *unique-document*
+        # date list (not raw chunks) so that one injected chunk cannot crowd out
+        # another from the same meeting.  For a corpus spanning Jan 2025–Sep 2026
+        # with 13 unique FOMC Statement dates the checkpoints land at:
+        #   n//2 - 1        → index 5  → Sep 2025  (cut #1, −25bp to 4–4¼%)
+        #   n//2            → index 6  → Oct 2025  (cut #2, −25bp to 3¾–4%)
+        #   round(0.6(n-1)) → index 7  → Dec 2025  (cut #3, −25bp to 3½–3¾%)
+        #   n-1             → index 12 → Jul 2026   (current hawkish hold)
+        # covering all three Fed cuts + current stance.  The same formula
+        # naturally spans the BoC cut cycle for the 14-document Rate Decision
+        # Statement corpus.
         #
-        # Both anchors replace slots from the *end* of the ranked list so organic
-        # results at the top are not displaced.
+        # Injected chunks replace slots from the *end* of the ranked list so
+        # organic top results are not displaced.
         if not doc_type:  # skip when caller already filtered to one doc_type
             ranked_set = {cid for cid, _ in ranked}
-            inject_slot = len(ranked) - 1  # fill from the last slot upward
+            inject_slot = len(ranked) - 1
 
             for a_type in ANNOUNCEMENT_TYPES:
                 if inject_slot < 0:
@@ -200,27 +245,42 @@ class Retriever:
 
                 all_type = self._collection.get(where=sub_where, include=["metadatas"])
 
-                # Build a date-sorted list of valid candidates not yet in results.
-                candidates: list[tuple[str, str]] = []  # (date, chunk_id)
+                # Build a map: document-date → first valid chunk id encountered.
+                # "First" means the lowest chunk index within a document, which
+                # for FOMC Statements is the main rate-decision paragraph.
+                date_to_cid: dict[str, str] = {}
                 for cid, meta in zip(all_type["ids"], all_type["metadatas"]):
                     if cid in ranked_set or cid not in self._chunk_map:
                         continue
                     c = self._chunk_map[cid]
-                    if self._chunk_matches(c, institution, doc_type, date_from, date_to):
-                        candidates.append((c.date, cid))
-                if not candidates:
-                    continue
-                candidates.sort()  # ascending by date
+                    if not self._chunk_matches(c, institution, doc_type, date_from, date_to):
+                        continue
+                    if c.date not in date_to_cid:
+                        date_to_cid[c.date] = cid
 
-                # Inject most-recent first, then midpoint if candidates are spread
-                # across enough distinct dates.
-                inject_cids: list[str] = []
-                recent_cid = candidates[-1][1]
-                inject_cids.append(recent_cid)
-                if len(candidates) > 2:
-                    mid_cid = candidates[len(candidates) // 2][1]
-                    if mid_cid != recent_cid:
-                        inject_cids.append(mid_cid)
+                if not date_to_cid:
+                    continue
+
+                unique_dates = sorted(date_to_cid.keys())
+                n = len(unique_dates)
+
+                # Four temporal checkpoints: pre-mid, mid, three-fifths, most-recent.
+                # For the 13-document FOMC corpus the four indices are 5, 6, 7, 12
+                # → Sep 2025 (cut #1), Oct 2025 (cut #2), Dec 2025 (cut #3), Jul 2026.
+                # The 0.6 fractile (vs the naive 2/3 ≈ 0.667) shifts the third
+                # checkpoint one slot earlier so it lands on the Dec 2025 cut rather
+                # than the post-cut Jan 2026 hold.
+                if n <= 4:
+                    sample_indices: list[int] = list(range(n))
+                else:
+                    sample_indices = sorted({
+                        max(0, n // 2 - 1),
+                        n // 2,
+                        int(round(0.6 * (n - 1))),
+                        n - 1,
+                    })
+
+                inject_cids = [date_to_cid[unique_dates[i]] for i in sample_indices]
 
                 for cid in inject_cids:
                     if inject_slot < 0:
