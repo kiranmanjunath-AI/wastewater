@@ -1,0 +1,19 @@
+# Environment / secrets
+.env
+
+# Downloaded documents and raw data
+data/raw/
+data/chroma/
+data/bm25.pkl
+data/metadata.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
