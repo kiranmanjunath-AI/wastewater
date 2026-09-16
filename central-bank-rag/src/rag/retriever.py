@@ -169,43 +169,65 @@ class Retriever:
 
         ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
 
-        # Ensure each primary announcement type is represented — if missing from
-        # top_n, inject the most RECENT chunk of that type.  Recency wins over
-        # semantic similarity here because announcement documents are short and
-        # uniform; the latest one always reflects the current policy stance and
-        # is therefore the most useful anchor regardless of query phrasing.
+        # Ensure each primary announcement type is represented.  The injection
+        # strategy prioritises temporal breadth over semantic similarity:
+        #
+        #   1. Most-recent chunk  — always reflects current policy stance.
+        #   2. Chronological-midpoint chunk  — for FOMC Statements the midpoint
+        #      of the Jan 2025–Sep 2026 corpus lands in the Oct–Dec 2025 window,
+        #      which is the actual rate-cut period.  Including it means "evolution"
+        #      queries get the cut decisions even though those brief statements
+        #      rank far outside the dense top-K on embedding similarity alone.
+        #
+        # Both anchors replace slots from the *end* of the ranked list so organic
+        # results at the top are not displaced.
         if not doc_type:  # skip when caller already filtered to one doc_type
             ranked_set = {cid for cid, _ in ranked}
+            inject_slot = len(ranked) - 1  # fill from the last slot upward
+
             for a_type in ANNOUNCEMENT_TYPES:
+                if inject_slot < 0:
+                    break
                 if any(
                     self._chunk_map.get(cid) and self._chunk_map[cid].doc_type == a_type
                     for cid in ranked_set
                 ):
                     continue
+
                 sub_where: dict = {"doc_type": {"$eq": a_type}}
                 if institution:
                     sub_where = {"$and": [sub_where, {"institution": {"$eq": institution}}]}
-                # Fetch every chunk of this type and pick the most recent one
-                # that passes the active filters and isn't already in the result set.
-                all_type = self._collection.get(
-                    where=sub_where,
-                    include=["metadatas"],
-                )
-                best_cid = None
-                best_date = ""
+
+                all_type = self._collection.get(where=sub_where, include=["metadatas"])
+
+                # Build a date-sorted list of valid candidates not yet in results.
+                candidates: list[tuple[str, str]] = []  # (date, chunk_id)
                 for cid, meta in zip(all_type["ids"], all_type["metadatas"]):
                     if cid in ranked_set or cid not in self._chunk_map:
                         continue
                     c = self._chunk_map[cid]
-                    if not self._chunk_matches(c, institution, doc_type, date_from, date_to):
-                        continue
-                    if c.date > best_date:
-                        best_date = c.date
-                        best_cid = cid
-                if best_cid is None:
+                    if self._chunk_matches(c, institution, doc_type, date_from, date_to):
+                        candidates.append((c.date, cid))
+                if not candidates:
                     continue
-                ranked[-1] = (best_cid, rrf_scores.get(best_cid, 0.0))
-                ranked_set.add(best_cid)
+                candidates.sort()  # ascending by date
+
+                # Inject most-recent first, then midpoint if candidates are spread
+                # across enough distinct dates.
+                inject_cids: list[str] = []
+                recent_cid = candidates[-1][1]
+                inject_cids.append(recent_cid)
+                if len(candidates) > 2:
+                    mid_cid = candidates[len(candidates) // 2][1]
+                    if mid_cid != recent_cid:
+                        inject_cids.append(mid_cid)
+
+                for cid in inject_cids:
+                    if inject_slot < 0:
+                        break
+                    ranked[inject_slot] = (cid, rrf_scores.get(cid, 0.0))
+                    ranked_set.add(cid)
+                    inject_slot -= 1
 
         results = []
         for cid, score in ranked:
