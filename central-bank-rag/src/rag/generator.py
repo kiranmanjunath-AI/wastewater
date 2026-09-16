@@ -19,7 +19,7 @@ from ..embed.chunker import Chunk
 log = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-sonnet-5"
-MAX_TOKENS   = 2048
+MAX_TOKENS   = 4096
 
 SYSTEM_PROMPT = """\
 You are a specialized analyst of central bank communications from the \
