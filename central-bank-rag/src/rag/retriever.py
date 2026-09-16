@@ -170,8 +170,10 @@ class Retriever:
         ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
 
         # Ensure each primary announcement type is represented — if missing from
-        # top_n, inject the most query-relevant chunk of that type via a
-        # targeted ChromaDB sub-query (bypasses the TOP_K_DENSE rank ceiling).
+        # top_n, inject the most RECENT chunk of that type.  Recency wins over
+        # semantic similarity here because announcement documents are short and
+        # uniform; the latest one always reflects the current policy stance and
+        # is therefore the most useful anchor regardless of query phrasing.
         if not doc_type:  # skip when caller already filtered to one doc_type
             ranked_set = {cid for cid, _ in ranked}
             for a_type in ANNOUNCEMENT_TYPES:
@@ -180,24 +182,26 @@ class Retriever:
                     for cid in ranked_set
                 ):
                     continue
-                # Build a where clause for the targeted sub-query
                 sub_where: dict = {"doc_type": {"$eq": a_type}}
                 if institution:
                     sub_where = {"$and": [sub_where, {"institution": {"$eq": institution}}]}
-                sub_res = self._collection.query(
-                    query_embeddings=[q_vec],
-                    n_results=10,
+                # Fetch every chunk of this type and pick the most recent one
+                # that passes the active filters and isn't already in the result set.
+                all_type = self._collection.get(
                     where=sub_where,
                     include=["metadatas"],
                 )
                 best_cid = None
-                for cid, meta in zip(sub_res["ids"][0], sub_res["metadatas"][0]):
+                best_date = ""
+                for cid, meta in zip(all_type["ids"], all_type["metadatas"]):
                     if cid in ranked_set or cid not in self._chunk_map:
                         continue
                     c = self._chunk_map[cid]
-                    if self._chunk_matches(c, institution, doc_type, date_from, date_to):
+                    if not self._chunk_matches(c, institution, doc_type, date_from, date_to):
+                        continue
+                    if c.date > best_date:
+                        best_date = c.date
                         best_cid = cid
-                        break  # already ordered by similarity; first valid = best
                 if best_cid is None:
                     continue
                 ranked[-1] = (best_cid, rrf_scores.get(best_cid, 0.0))
