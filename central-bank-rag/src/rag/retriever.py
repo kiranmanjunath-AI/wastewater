@@ -22,7 +22,7 @@ TOP_K_DENSE   = 50   # candidates pulled from ChromaDB
 TOP_K_SPARSE  = 30   # candidates pulled from BM25
 BM25_PER_DOC  = 2    # max BM25 chunks per source document (prevents flooding)
 RRF_K         = 60   # RRF constant (standard value)
-DEFAULT_TOP_N = 8    # final chunks passed to the generator
+DEFAULT_TOP_N = 10   # final chunks passed to the generator
 
 # Primary announcement documents get a score boost so they surface
 # over longer contextual documents (minutes, deliberations) when both
@@ -221,8 +221,14 @@ class Retriever:
         #   round(0.6(n-1)) → index 7  → Dec 2025  (cut #3, −25bp to 3½–3¾%)
         #   n-1             → index 12 → Jul 2026   (current hawkish hold)
         # covering all three Fed cuts + current stance.  The same formula
-        # naturally spans the BoC cut cycle for the 14-document Rate Decision
-        # Statement corpus.
+        # applied to the 14 BoC Rate Decision Statement dates yields Sep, Oct,
+        # Dec 2025, Sep 2026 — all three late-2025 BoC cuts + current stance.
+        #
+        # Guard: skip injection only when the most-recently dated document of
+        # this type is already organically covered (good temporal coverage).
+        # The old "any organic → skip" guard was too conservative: early-period
+        # announcements in organic results suppressed injection of late-period
+        # ones entirely (e.g. Jan/Mar 2025 BoC → no mid-late 2025 BoC injected).
         #
         # Injected chunks replace slots from the *end* of the ranked list so
         # organic top results are not displaced.
@@ -233,11 +239,6 @@ class Retriever:
             for a_type in ANNOUNCEMENT_TYPES:
                 if inject_slot < 0:
                     break
-                if any(
-                    self._chunk_map.get(cid) and self._chunk_map[cid].doc_type == a_type
-                    for cid in ranked_set
-                ):
-                    continue
 
                 sub_where: dict = {"doc_type": {"$eq": a_type}}
                 if institution:
@@ -245,14 +246,25 @@ class Retriever:
 
                 all_type = self._collection.get(where=sub_where, include=["metadatas"])
 
-                # Build a map: document-date → first valid chunk id encountered.
-                # "First" means the lowest chunk index within a document, which
-                # for FOMC Statements is the main rate-decision paragraph.
+                # Find which source-document IDs of this type are already
+                # organically represented so we never inject a second chunk
+                # from the same meeting that is already in results.
+                organic_doc_ids_of_type = {
+                    self._chunk_map[cid].doc_id
+                    for cid in ranked_set
+                    if self._chunk_map.get(cid)
+                    and self._chunk_map[cid].doc_type == a_type
+                }
+
+                # Build a map: document-date → first valid chunk id, skipping
+                # entire documents that are already organically covered.
                 date_to_cid: dict[str, str] = {}
                 for cid, meta in zip(all_type["ids"], all_type["metadatas"]):
                     if cid in ranked_set or cid not in self._chunk_map:
                         continue
                     c = self._chunk_map[cid]
+                    if c.doc_id in organic_doc_ids_of_type:
+                        continue  # another chunk of this doc is already organic
                     if not self._chunk_matches(c, institution, doc_type, date_from, date_to):
                         continue
                     if c.date not in date_to_cid:
@@ -261,15 +273,26 @@ class Retriever:
                 if not date_to_cid:
                     continue
 
+                # Skip injection only if the most-recent available date is
+                # already organically covered — that implies good temporal reach.
+                if organic_doc_ids_of_type:
+                    organic_dates = {
+                        self._chunk_map[cid].date
+                        for cid in ranked_set
+                        if self._chunk_map.get(cid)
+                        and self._chunk_map[cid].doc_type == a_type
+                    }
+                    most_recent_overall = max(set(date_to_cid) | organic_dates)
+                    if most_recent_overall in organic_dates:
+                        continue  # most-recent meeting already represented
+
                 unique_dates = sorted(date_to_cid.keys())
                 n = len(unique_dates)
 
                 # Four temporal checkpoints: pre-mid, mid, three-fifths, most-recent.
-                # For the 13-document FOMC corpus the four indices are 5, 6, 7, 12
-                # → Sep 2025 (cut #1), Oct 2025 (cut #2), Dec 2025 (cut #3), Jul 2026.
-                # The 0.6 fractile (vs the naive 2/3 ≈ 0.667) shifts the third
-                # checkpoint one slot earlier so it lands on the Dec 2025 cut rather
-                # than the post-cut Jan 2026 hold.
+                # The 0.6 fractile shifts the third checkpoint one slot earlier
+                # vs 2/3 so it lands on the Dec 2025 cut rather than the Jan 2026
+                # hold for both the FOMC (n=13) and BoC (n=12 after organic removed).
                 if n <= 4:
                     sample_indices: list[int] = list(range(n))
                 else:

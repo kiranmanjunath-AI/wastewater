@@ -159,7 +159,7 @@ with st.sidebar:
                 min_value=date(2025, 1, 1), max_value=date(2026, 9, 30),
             )
 
-        top_n = st.slider("Sources per answer", min_value=1, max_value=15, value=8)
+        top_n = st.slider("Sources per answer", min_value=1, max_value=15, value=10)
 
     institution_filter = None if institution_choice == "All" else institution_choice
     doc_type_filter    = None if doc_type_choice == "All" else doc_type_choice
