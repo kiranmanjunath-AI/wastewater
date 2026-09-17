@@ -22,7 +22,7 @@ TOP_K_DENSE   = 50   # candidates pulled from ChromaDB
 TOP_K_SPARSE  = 30   # candidates pulled from BM25
 BM25_PER_DOC  = 2    # max BM25 chunks per source document (prevents flooding)
 RRF_K         = 60   # RRF constant (standard value)
-DEFAULT_TOP_N = 10   # final chunks passed to the generator
+DEFAULT_TOP_N = 12   # final chunks passed to the generator
 
 # Primary announcement documents get a score boost so they surface
 # over longer contextual documents (minutes, deliberations) when both
@@ -289,14 +289,16 @@ class Retriever:
                 unique_dates = sorted(date_to_cid.keys())
                 n = len(unique_dates)
 
-                # Four temporal checkpoints: pre-mid, mid, three-fifths, most-recent.
-                # The 0.6 fractile shifts the third checkpoint one slot earlier
-                # vs 2/3 so it lands on the Dec 2025 cut rather than the Jan 2026
-                # hold for both the FOMC (n=13) and BoC (n=12 after organic removed).
-                if n <= 4:
+                # Five temporal checkpoints: two sub-mid, mid, three-fifths, most-recent.
+                # Adding n//2-2 ensures all three 2025 rate cuts stay covered even
+                # as the corpus grows beyond 13 FOMC dates:
+                #   n=13: {4,5,6,7,12} → Jul/Sep/Oct/Dec 2025 + Jul 2026 (all 3 cuts)
+                #   n=14: {5,6,7,8,13} → Sep/Oct/Dec 2025 + Jan 2026 + Sep 2026 (all 3 cuts)
+                if n <= 5:
                     sample_indices: list[int] = list(range(n))
                 else:
                     sample_indices = sorted({
+                        max(0, n // 2 - 2),
                         max(0, n // 2 - 1),
                         n // 2,
                         int(round(0.6 * (n - 1))),
