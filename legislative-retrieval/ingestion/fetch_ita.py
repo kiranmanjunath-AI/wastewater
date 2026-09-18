@@ -1,7 +1,11 @@
 """
 fetch_ita.py
 Download the Canadian Income Tax Act XML from Justice Laws (both EN and FR).
-Saves raw XML to DATA_DIR and returns local file paths.
+Saves raw XML to DATA_DIR and returns local file paths + consolidation date.
+
+Correct URLs (verified 2026-09):
+  EN: https://laws-lois.justice.gc.ca/eng/XML/I-3.3.xml
+  FR: https://laws-lois.justice.gc.ca/fra/XML/I-3.3.xml
 """
 
 import os
@@ -14,8 +18,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 ITA_URLS = {
-    "en": "https://laws-justice.gc.ca/eng/acts/I-3.3/FullText.xml",
-    "fr": "https://laws-lois.justice.gc.ca/fra/lois/I-3.3/TexteComplet.xml",
+    "en": "https://laws-lois.justice.gc.ca/eng/XML/I-3.3.xml",
+    "fr": "https://laws-lois.justice.gc.ca/fra/XML/I-3.3.xml",
 }
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
@@ -25,6 +29,38 @@ def compute_hash(content: bytes) -> str:
     """Return sha256:<hex> hash of raw bytes."""
     digest = hashlib.sha256(content).hexdigest()
     return f"sha256:{digest}"
+
+
+def extract_consolidation_date(content: bytes) -> str:
+    """
+    Extract the point-in-time (consolidation) date from the XML.
+
+    Tries two sources in order:
+      1. lims:pit-date attribute on <Statute> root  (e.g. "2026-06-18")
+      2. <BillHistory><Stages stage="consolidation"><Date> elements
+    Returns "" if neither is found.
+    """
+    try:
+        from lxml import etree
+        root = etree.fromstring(content)
+        # lims namespace
+        lims_ns = "http://justice.gc.ca/lims"
+        pit = root.get(f"{{{lims_ns}}}pit-date") or root.get("pit-date")
+        if pit:
+            return pit.strip()
+        # Fallback: <BillHistory><Stages stage="consolidation"><Date>
+        for stages in root.iter("{*}Stages"):
+            if stages.get("stage") == "consolidation":
+                date_el = next(stages.iter("{*}Date"), None)
+                if date_el is not None:
+                    yyyy = (date_el.findtext("{*}YYYY") or "").strip()
+                    mm = (date_el.findtext("{*}MM") or "").strip().zfill(2)
+                    dd = (date_el.findtext("{*}DD") or "").strip().zfill(2)
+                    if yyyy:
+                        return f"{yyyy}-{mm}-{dd}"
+    except Exception:
+        pass
+    return ""
 
 
 def fetch_xml(language: str, url: str, timeout: int = 60) -> tuple[bytes, str]:
@@ -59,7 +95,6 @@ def fetch_xml(language: str, url: str, timeout: int = 60) -> tuple[bytes, str]:
     # Sanity-check: confirm we got XML, not an HTML error page
     sample = content[:500].lower()
     if b"<?xml" not in sample and b"<statute" not in sample and b"<loi" not in sample:
-        # Try to detect HTML error page
         if b"<html" in sample or b"<!doctype" in sample:
             raise RuntimeError(
                 f"Expected XML from Justice Laws but got an HTML page for language '{language}'. "
@@ -91,11 +126,12 @@ def fetch_all(languages: list[str] | None = None) -> dict[str, dict]:
     Fetch ITA XML for each requested language.
 
     Returns a dict keyed by language with keys:
-      path        Path – local file path
-      version_hash str – sha256:... of raw content
-      url         str – source URL
+      path               Path – local file path
+      version_hash       str  – sha256:... of raw content
+      url                str  – source URL
+      consolidated_as_of str  – ISO date from lims:pit-date (may be "")
 
-    Raises RuntimeError for any language that fails.
+    Raises RuntimeError if all languages fail.
     """
     if languages is None:
         languages = list(ITA_URLS.keys())
@@ -111,7 +147,15 @@ def fetch_all(languages: list[str] | None = None) -> dict[str, dict]:
         try:
             content, version_hash = fetch_xml(lang, url)
             path = save_xml(lang, content)
-            results[lang] = {"path": path, "version_hash": version_hash, "url": url}
+            consolidated_as_of = extract_consolidation_date(content)
+            if consolidated_as_of:
+                print(f"[fetch]   Consolidated as of: {consolidated_as_of}")
+            results[lang] = {
+                "path": path,
+                "version_hash": version_hash,
+                "url": url,
+                "consolidated_as_of": consolidated_as_of,
+            }
         except RuntimeError as exc:
             print(f"[fetch] ERROR ({lang}): {exc}", file=sys.stderr)
             errors.append(str(exc))
@@ -143,6 +187,8 @@ if __name__ == "__main__":
         results = fetch_all(args.languages)
         for lang, info in results.items():
             print(f"\n[fetch] {lang.upper()} ready: {info['path']}")
+            if info.get("consolidated_as_of"):
+                print(f"         Consolidated as of: {info['consolidated_as_of']}")
     except RuntimeError as exc:
         print(f"\n[fetch] FATAL: {exc}", file=sys.stderr)
         sys.exit(1)

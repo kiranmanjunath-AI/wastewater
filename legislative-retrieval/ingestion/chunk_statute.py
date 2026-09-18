@@ -3,12 +3,36 @@ chunk_statute.py
 Parse the Justice Laws XML for the Canadian Income Tax Act and produce
 citation-aware chunks suitable for embedding and loading into Qdrant.
 
-Chunking strategy: hierarchical
-  - Retrievable unit: subsection (or paragraph if subsection > 400 tokens)
-  - Context prefix: parent section's MarginalNote + "Part X, Division Y" breadcrumb
-  - If a subsection exceeds 400 tokens, split at paragraph boundaries
+Actual Justice Laws XML structure (verified against live document):
+  <Statute>
+    <Identification> ... </Identification>
+    <Body>
+      <Heading level="1"> <Label>PART I</Label> <TitleText>Income Tax</TitleText> </Heading>
+      <Heading level="2"> <Label>DIVISION A</Label> <TitleText>Liability for Tax</TitleText> </Heading>
+      <Heading level="3"> <TitleText>Basic Rules</TitleText> </Heading>  (no Label)
+      <Section>
+        <MarginalNote>Tax payable...</MarginalNote>
+        <Label>2</Label>
+        <Subsection>
+          <Label>(1)</Label>
+          <Text>...</Text>
+          <Paragraph> <Label>(a)</Label> <Text>...</Text> </Paragraph>
+          <ContinuedSectionSubsection> <Text>...</Text> </ContinuedSectionSubsection>
+        </Subsection>
+        <HistoricalNote>...</HistoricalNote>
+      </Section>
+      ...
+    </Body>
+  </Statute>
 
-Returns a list of dicts matching the Qdrant payload schema.
+Key facts:
+  - Sections are FLAT under <Body>, not nested in <Part>/<Division> containers.
+  - Part/Division context is tracked from preceding <Heading> siblings.
+  - Section/subsection/paragraph numbers are in child <Label> elements, NOT attributes.
+  - Subsection labels include parentheses: "(1)" -> strip to "1".
+  - Paragraph labels include parentheses: "(a)" -> strip to "a".
+  - <HistoricalNote> must be excluded from chunk text.
+  - <ContinuedSectionSubsection> is continuation prose after a paragraph list.
 """
 
 from __future__ import annotations
@@ -26,14 +50,55 @@ load_dotenv()
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 
-# Rough token estimate: words * 1.3
 TOKEN_MULTIPLIER = 1.3
 SUBSECTION_TOKEN_LIMIT = 400
+
+LIMS_NS = "http://justice.gc.ca/lims"
+
+# Tags whose text should be excluded from all chunks
+EXCLUDED_TAGS = {"HistoricalNote", "HistoricalNoteSubItem", "Marginal Note", "ReaderNote"}
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def strip_ns(tag: str) -> str:
+    """Remove Clark-notation namespace prefix from a tag name."""
+    if tag.startswith("{"):
+        return tag.split("}", 1)[1]
+    return tag
+
+
+def local(node) -> str:
+    return strip_ns(node.tag)
+
+
+def find_children(node, *local_names: str):
+    """Yield direct children whose local name is in local_names."""
+    for child in node:
+        if local(child) in local_names:
+            yield child
+
+
+def find_first_child(node, *local_names: str):
+    for child in node:
+        if local(child) in local_names:
+            return child
+    return None
+
+
+def get_label_text(node) -> str:
+    """Get the text from the <Label> child of node, stripped of whitespace and parens."""
+    label_el = find_first_child(node, "Label")
+    if label_el is None:
+        return ""
+    text = (label_el.text or "").strip()
+    # Remove surrounding parentheses: "(1)" -> "1", "(a)" -> "a"
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1]
+    return text
+
 
 def estimate_tokens(text: str) -> int:
     return int(len(text.split()) * TOKEN_MULTIPLIER)
@@ -43,19 +108,26 @@ def sha256_hex(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def clean_text(node) -> str:
-    """Extract all text content from an lxml element, collapsing whitespace."""
-    if node is None:
-        return ""
+def collect_text(node, exclude_tags=frozenset(EXCLUDED_TAGS)) -> str:
+    """
+    Recursively collect all text under node, skipping excluded tags.
+    Collapses whitespace.
+    """
     parts = []
-    for part in node.itertext():
-        parts.append(part)
+    _collect_text_into(node, parts, exclude_tags)
     return " ".join(" ".join(parts).split())
 
 
-def get_label(node, default: str = "") -> str:
-    """Return label attribute, stripping whitespace."""
-    return (node.get("label") or node.get("id") or default).strip()
+def _collect_text_into(node, parts: list, exclude_tags: frozenset):
+    tag = local(node)
+    if tag in exclude_tags:
+        return
+    if node.text:
+        parts.append(node.text)
+    for child in node:
+        _collect_text_into(child, parts, exclude_tags)
+        if child.tail:
+            parts.append(child.tail)
 
 
 def build_citation(
@@ -64,7 +136,6 @@ def build_citation(
     paragraph: Optional[str] = None,
     subparagraph: Optional[str] = None,
 ) -> str:
-    """Build a human-readable ITA citation string."""
     cit = f"ITA s.{section}"
     if subsection:
         cit += f"({subsection})"
@@ -110,59 +181,34 @@ def make_chunk(
 
 
 # ---------------------------------------------------------------------------
-# XML namespace resolver
+# Subsection/paragraph chunking
 # ---------------------------------------------------------------------------
 
-def strip_ns(tag: str) -> str:
-    """Remove Clark-notation namespace from a tag name."""
-    if tag.startswith("{"):
-        return tag.split("}", 1)[1]
-    return tag
-
-
-def find_all(node, local_name: str):
-    """Find all direct children whose local name matches, ignoring namespace."""
-    return [c for c in node if strip_ns(c.tag) == local_name]
-
-
-def find_first(node, local_name: str):
-    """Find first child with matching local name."""
-    for c in node:
-        if strip_ns(c.tag) == local_name:
-            return c
-    return None
-
-
-def find_recursive(node, local_name: str):
-    """Recursively find all elements whose local name matches."""
-    results = []
-    for c in node.iter():
-        if strip_ns(c.tag) == local_name:
-            results.append(c)
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Core parser
-# ---------------------------------------------------------------------------
-
-def parse_paragraph_text(para_node) -> str:
-    """Extract text from a Paragraph or Subparagraph node."""
-    texts = []
+def _paragraph_text(para_node) -> str:
+    """
+    Extract text from a <Paragraph> or <Subparagraph>/<Clause> node.
+    Recursively includes sub-levels with their labels.
+    """
+    label = get_label_text(para_node)
+    # Collect Text children directly
+    text_parts = []
     for child in para_node:
-        local = strip_ns(child.tag)
-        if local in ("Text", "Definition", "DefinedTermEn", "DefinedTermFr"):
-            texts.append(clean_text(child))
-        elif local in ("Subparagraph", "Clause", "Subclause"):
-            sub_label = get_label(child)
-            sub_text = parse_paragraph_text(child)
+        tag = local(child)
+        if tag == "Text":
+            text_parts.append(collect_text(child))
+        elif tag in ("Subparagraph", "Clause", "Subclause"):
+            sub_label = get_label_text(child)
+            sub_text = _paragraph_text(child)
             if sub_label and sub_text:
-                texts.append(f"({sub_label}) {sub_text}")
+                text_parts.append(f"({sub_label}) {sub_text}")
             elif sub_text:
-                texts.append(sub_text)
-    if not texts:
-        texts.append(clean_text(para_node))
-    return " ".join(t for t in texts if t)
+                text_parts.append(sub_text)
+    if not text_parts:
+        text_parts.append(collect_text(para_node))
+    combined = " ".join(t for t in text_parts if t)
+    if label:
+        return f"({label}) {combined}"
+    return combined
 
 
 def chunks_from_subsection(
@@ -180,102 +226,93 @@ def chunks_from_subsection(
     """
     Produce one or more chunks from a single <Subsection> node.
 
-    If total token count <= SUBSECTION_TOKEN_LIMIT, return one chunk for the
-    whole subsection.  Otherwise, split at <Paragraph> boundaries.
+    If total tokens <= SUBSECTION_TOKEN_LIMIT, one chunk for the whole subsection.
+    Otherwise, split at <Paragraph> boundaries.
     """
-    # Collect top-level text (before any paragraph)
+    # Intro text: <Text> children before any <Paragraph>
     intro_parts = []
+    paragraphs = []
+    continuation_parts = []
+
     for child in sub_node:
-        local = strip_ns(child.tag)
-        if local == "Text":
-            intro_parts.append(clean_text(child))
+        tag = local(child)
+        if tag == "Label":
+            continue
+        elif tag == "MarginalNote":
+            continue  # subsection headings are already in context_prefix at section level
+        elif tag == "Text" and not paragraphs:
+            intro_parts.append(collect_text(child))
+        elif tag == "Paragraph":
+            paragraphs.append(child)
+        elif tag == "ContinuedSectionSubsection":
+            for text_child in find_children(child, "Text"):
+                continuation_parts.append(collect_text(text_child))
+        elif tag == "HistoricalNote":
+            continue
 
     intro_text = " ".join(intro_parts)
+    continuation_text = " ".join(continuation_parts)
 
-    # Collect paragraphs
-    paragraphs = find_all(sub_node, "Paragraph")
     if not paragraphs:
-        # No paragraphs — the subsection IS the atomic unit
-        text = intro_text or clean_text(sub_node)
-        if not text:
+        text = " ".join(t for t in [intro_text, continuation_text] if t) or collect_text(sub_node)
+        if not text.strip():
             return []
         citation = build_citation(section_label, sub_label)
-        return [
-            make_chunk(
-                text=text,
-                context_prefix=context_prefix,
-                citation=citation,
-                act=act,
-                part=part_label,
-                division=division_label,
-                section=section_label,
-                subsection=sub_label,
-                paragraph=None,
-                language=language,
-                valid_from=valid_from,
-                amending_act=amending_act,
-            )
-        ]
+        return [make_chunk(
+            text=text.strip(),
+            context_prefix=context_prefix,
+            citation=citation,
+            act=act, part=part_label, division=division_label,
+            section=section_label, subsection=sub_label, paragraph=None,
+            language=language, valid_from=valid_from, amending_act=amending_act,
+        )]
 
-    # Build full subsection text to check size
-    para_texts = {}
-    for p in paragraphs:
-        p_label = get_label(p)
-        p_text = parse_paragraph_text(p)
-        para_texts[p_label] = p_text
+    # Check if whole subsection fits in one chunk
+    para_texts = {get_label_text(p): _paragraph_text(p) for p in paragraphs}
+    all_text = " ".join(t for t in [intro_text, *para_texts.values(), continuation_text] if t)
 
-    all_text = intro_text + " " + " ".join(para_texts.values())
     if estimate_tokens(all_text) <= SUBSECTION_TOKEN_LIMIT:
-        # Fits in one chunk
         citation = build_citation(section_label, sub_label)
-        return [
-            make_chunk(
-                text=all_text.strip(),
-                context_prefix=context_prefix,
-                citation=citation,
-                act=act,
-                part=part_label,
-                division=division_label,
-                section=section_label,
-                subsection=sub_label,
-                paragraph=None,
-                language=language,
-                valid_from=valid_from,
-                amending_act=amending_act,
-            )
-        ]
+        return [make_chunk(
+            text=all_text.strip(),
+            context_prefix=context_prefix,
+            citation=citation,
+            act=act, part=part_label, division=division_label,
+            section=section_label, subsection=sub_label, paragraph=None,
+            language=language, valid_from=valid_from, amending_act=amending_act,
+        )]
 
-    # Split into per-paragraph chunks; include intro in first paragraph
+    # Split at paragraph boundaries; attach continuation to last paragraph
     chunks = []
-    first = True
-    for p_label, p_text in para_texts.items():
-        if first and intro_text:
-            combined = f"{intro_text} ({p_label}) {p_text}"
-            first = False
-        else:
-            combined = f"({p_label}) {p_text}"
-        if not combined.strip():
+    items = list(para_texts.items())
+    for i, (p_label, p_text) in enumerate(items):
+        is_first = i == 0
+        is_last = i == len(items) - 1
+        parts = []
+        if is_first and intro_text:
+            parts.append(intro_text)
+        parts.append(p_text)
+        if is_last and continuation_text:
+            parts.append(continuation_text)
+        combined = " ".join(p for p in parts if p).strip()
+        if not combined:
             continue
         citation = build_citation(section_label, sub_label, p_label)
-        chunks.append(
-            make_chunk(
-                text=combined.strip(),
-                context_prefix=context_prefix,
-                citation=citation,
-                act=act,
-                part=part_label,
-                division=division_label,
-                section=section_label,
-                subsection=sub_label,
-                paragraph=p_label,
-                language=language,
-                valid_from=valid_from,
-                amending_act=amending_act,
-            )
-        )
+        chunks.append(make_chunk(
+            text=combined,
+            context_prefix=context_prefix,
+            citation=citation,
+            act=act, part=part_label, division=division_label,
+            section=section_label, subsection=sub_label, paragraph=p_label,
+            language=language, valid_from=valid_from, amending_act=amending_act,
+        ))
 
     return chunks
 
+
+# ---------------------------------------------------------------------------
+# Core parser: flat walk of <Body>
+# ---------------------------------------------------------------------------
 
 def parse_ita_xml(
     xml_path: Path,
@@ -284,139 +321,130 @@ def parse_ita_xml(
     amending_act: str = "",
 ) -> list[dict]:
     """
-    Parse the ITA XML file and return a flat list of chunk dicts.
-    Prints progress as it goes.
+    Parse the ITA XML and return a flat list of chunk dicts.
+
+    Walks <Body> children sequentially, tracking Part/Division context from
+    <Heading> elements and emitting chunks for every <Section>.
     """
     print(f"[parse] Reading {xml_path} ...")
     tree = etree.parse(str(xml_path))
     root = tree.getroot()
+
+    # Find <Body> (may be namespaced)
+    body = find_first_child(root, "Body", "Corps")
+    if body is None:
+        # Some versions nest Body inside another element; fall back to root
+        for el in root.iter():
+            if local(el) in ("Body", "Corps"):
+                body = el
+                break
+    if body is None:
+        print("[parse] WARNING: Could not find <Body> element; using root.", file=sys.stderr)
+        body = root
 
     chunks: list[dict] = []
     section_count = 0
     subsection_count = 0
     warning_count = 0
 
-    # The root may be <Statute> or <Loi>; find Body or Corps
-    body_candidates = ["Body", "Corps", "Statute", "Loi"]
-    body = None
-    for name in body_candidates:
-        body = find_first(root, name)
-        if body is not None:
-            break
-    if body is None:
-        body = root  # fall back to root
+    current_part = ""
+    current_division = ""
 
-    # Try to locate Part containers; if none, treat body as flat
-    parts = find_all(body, "Part") or find_all(body, "Partie")
-    if not parts:
-        # Some XML versions nest everything directly under Body
-        parts = [body]
-        part_label_override = ""
-    else:
-        part_label_override = None
+    for child in body:
+        tag = local(child)
 
-    for part_node in parts:
-        if part_label_override is not None:
-            part_label = part_label_override
-        else:
-            part_label = get_label(part_node, "?")
+        if tag == "Heading":
+            level = child.get("level", "")
+            label_el = find_first_child(child, "Label")
+            label_text = (label_el.text or "").strip() if label_el is not None else ""
+            title_el = find_first_child(child, "TitleText")
+            title_text = (title_el.text or "").strip() if title_el is not None else ""
 
-        # Divisions (optional)
-        divisions = find_all(part_node, "Division") or find_all(part_node, "Section")
-        # If no divisions, treat the part itself as a flat list of sections
-        if not divisions:
-            divisions = [part_node]
-            div_label_override = ""
-        else:
-            div_label_override = None
+            if level == "1":
+                current_part = label_text or title_text
+                current_division = ""  # reset division when part changes
+            elif level == "2":
+                current_division = label_text or title_text
+            # level 3 = sub-division (e.g. "Basic Rules") — no label, not tracked
 
-        for div_node in divisions:
-            if div_label_override is not None:
-                div_label = div_label_override
+        elif tag == "Section":
+            sec_label = get_label_text(child)
+            if not sec_label:
+                warning_count += 1
+                continue
+
+            marg = find_first_child(child, "MarginalNote")
+            marginal_text = collect_text(marg).strip() if marg is not None else ""
+
+            breadcrumb_parts = []
+            if current_part:
+                p = current_part.upper()
+                breadcrumb_parts.append(current_part if p.startswith("PART") else f"Part {current_part}")
+            if current_division:
+                d = current_division.upper()
+                breadcrumb_parts.append(current_division if d.startswith("DIVISION") else f"Division {current_division}")
+            breadcrumb = ", ".join(breadcrumb_parts)
+
+            if marginal_text and breadcrumb:
+                context_prefix = f"{marginal_text} [{breadcrumb}]"
+            elif marginal_text:
+                context_prefix = marginal_text
+            elif breadcrumb:
+                context_prefix = f"[{breadcrumb}]"
             else:
-                div_label = get_label(div_node, "?")
+                context_prefix = f"ITA s.{sec_label}"
 
-            # Find all Section elements anywhere under this division
-            sections = find_all(div_node, "Section") or find_recursive(div_node, "Section")
+            section_count += 1
 
-            for sec_node in sections:
-                sec_label = get_label(sec_node)
-                if not sec_label:
-                    warning_count += 1
-                    continue
+            subsections = list(find_children(child, "Subsection", "Paragraphe"))
 
-                # MarginalNote is the heading for this section
-                marg = find_first(sec_node, "MarginalNote") or find_first(sec_node, "NoteMarg")
-                marginal_text = clean_text(marg) if marg is not None else ""
-
-                breadcrumb_parts = []
-                if part_label:
-                    breadcrumb_parts.append(f"Part {part_label}")
-                if div_label:
-                    breadcrumb_parts.append(f"Division {div_label}")
-                breadcrumb = ", ".join(breadcrumb_parts)
-
-                if marginal_text and breadcrumb:
-                    context_prefix = f"{marginal_text} [{breadcrumb}]"
-                elif marginal_text:
-                    context_prefix = marginal_text
-                elif breadcrumb:
-                    context_prefix = f"[{breadcrumb}]"
-                else:
-                    context_prefix = f"ITA s.{sec_label}"
-
-                section_count += 1
-
-                # Find subsections
-                subsections = find_all(sec_node, "Subsection") or find_all(sec_node, "Paragraphe")
-
-                if not subsections:
-                    # Flat section — treat body text as one chunk
-                    text = clean_text(sec_node)
-                    if marginal_text:
-                        text = text.replace(marginal_text, "").strip()
-                    if not text:
+            if not subsections:
+                # Flat section: collect all non-heading, non-historical text
+                text_parts = []
+                for el in child:
+                    tag2 = local(el)
+                    if tag2 in ("MarginalNote", "Label", "HistoricalNote"):
                         continue
-                    citation = build_citation(sec_label)
-                    chunks.append(
-                        make_chunk(
-                            text=text,
-                            context_prefix=context_prefix,
-                            citation=citation,
-                            act="ITA",
-                            part=part_label,
-                            division=div_label,
-                            section=sec_label,
-                            subsection=None,
-                            paragraph=None,
-                            language=language,
-                            valid_from=valid_from,
-                            amending_act=amending_act,
-                        )
-                    )
-                    subsection_count += 1
+                    text_parts.append(collect_text(el))
+                text = " ".join(t for t in text_parts if t).strip()
+                if not text:
                     continue
+                citation = build_citation(sec_label)
+                chunks.append(make_chunk(
+                    text=text,
+                    context_prefix=context_prefix,
+                    citation=citation,
+                    act="ITA",
+                    part=current_part,
+                    division=current_division,
+                    section=sec_label,
+                    subsection=None,
+                    paragraph=None,
+                    language=language,
+                    valid_from=valid_from,
+                    amending_act=amending_act,
+                ))
+                subsection_count += 1
+                continue
 
-                for sub_node in subsections:
-                    sub_label = get_label(sub_node)
-                    new_chunks = chunks_from_subsection(
-                        sub_node=sub_node,
-                        sub_label=sub_label,
-                        section_label=sec_label,
-                        context_prefix=context_prefix,
-                        part_label=part_label,
-                        division_label=div_label,
-                        language=language,
-                        valid_from=valid_from,
-                        amending_act=amending_act,
-                    )
-                    chunks.extend(new_chunks)
-                    subsection_count += 1
+            for sub_node in subsections:
+                sub_label = get_label_text(sub_node)
+                new_chunks = chunks_from_subsection(
+                    sub_node=sub_node,
+                    sub_label=sub_label,
+                    section_label=sec_label,
+                    context_prefix=context_prefix,
+                    part_label=current_part,
+                    division_label=current_division,
+                    language=language,
+                    valid_from=valid_from,
+                    amending_act=amending_act,
+                )
+                chunks.extend(new_chunks)
+                subsection_count += 1
 
-                if section_count % 50 == 0:
-                    print(
-                        f"[parse]   ... {section_count} sections, {len(chunks)} chunks so far"
-                    )
+            if section_count % 50 == 0:
+                print(f"[parse]   ... {section_count} sections, {len(chunks)} chunks so far")
 
     print(
         f"[parse] Done. Sections: {section_count}, subsections processed: {subsection_count}, "
@@ -440,28 +468,10 @@ if __name__ == "__main__":
         default=DATA_DIR / "ita_en.xml",
         help="Path to the ITA XML file",
     )
-    parser.add_argument(
-        "--language",
-        default="en",
-        choices=["en", "fr"],
-        help="Language tag for the chunks",
-    )
-    parser.add_argument(
-        "--valid-from",
-        default="2024-01-01",
-        help="ISO date for valid_from field",
-    )
-    parser.add_argument(
-        "--amending-act",
-        default="",
-        help="Amending act identifier (e.g. 'S.C. 2024, c. 15')",
-    )
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="Optional JSON output path for inspection",
-    )
+    parser.add_argument("--language", default="en", choices=["en", "fr"])
+    parser.add_argument("--valid-from", default="2024-01-01")
+    parser.add_argument("--amending-act", default="")
+    parser.add_argument("--out", type=Path, default=None, help="JSON output path for sample inspection")
     args = parser.parse_args()
 
     if not args.xml.exists():
@@ -480,7 +490,9 @@ if __name__ == "__main__":
         args.out.write_text(json.dumps(result[:20], indent=2, ensure_ascii=False))
         print(f"[parse] Sample (20 chunks) written to {args.out}")
     else:
-        print(f"\n[parse] First chunk sample:")
+        print(f"\n[parse] First chunk:")
         if result:
-            import json
             print(json.dumps(result[0], indent=2, ensure_ascii=False))
+        print(f"\n[parse] Last chunk:")
+        if result:
+            print(json.dumps(result[-1], indent=2, ensure_ascii=False))

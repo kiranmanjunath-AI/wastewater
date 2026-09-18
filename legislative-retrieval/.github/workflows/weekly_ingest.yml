@@ -91,15 +91,17 @@ jobs:
 
           from ingestion.chunk_statute import parse_ita_xml
           from ingestion.load_qdrant import run_ingestion
-          from ingestion.fetch_ita import compute_hash
+          from ingestion.fetch_ita import compute_hash, extract_consolidation_date
 
           xml_path = Path("./data/ita_en.xml")
-          xml_hash = compute_hash(xml_path.read_bytes())
+          raw = xml_path.read_bytes()
+          xml_hash = compute_hash(raw)
+          consolidated_as_of = extract_consolidation_date(raw) or str(date.today())
 
           chunks = parse_ita_xml(
               xml_path=xml_path,
               language="en",
-              valid_from=str(date.today()),
+              valid_from=consolidated_as_of,
               amending_act=os.getenv("AMENDING_ACT", ""),
           )
 
@@ -107,9 +109,9 @@ jobs:
               chunks=chunks,
               language="en",
               act="ITA",
-              consolidated_as_of=str(date.today()),
+              consolidated_as_of=consolidated_as_of,
               amending_act=os.getenv("AMENDING_ACT", ""),
-              source_url="https://laws-justice.gc.ca/eng/acts/I-3.3/FullText.xml",
+              source_url="https://laws-lois.justice.gc.ca/eng/XML/I-3.3.xml",
               xml_version_hash=xml_hash,
           )
 
@@ -132,7 +134,7 @@ jobs:
           from dotenv import load_dotenv
           load_dotenv()
 
-          from ingestion.fetch_ita import fetch_all, compute_hash
+          from ingestion.fetch_ita import fetch_all, compute_hash, extract_consolidation_date
           from ingestion.chunk_statute import parse_ita_xml
           from ingestion.load_qdrant import run_ingestion
 
@@ -142,18 +144,20 @@ jobs:
           else:
               fr = results["fr"]
               xml_path = fr["path"]
-              xml_hash = fr["version_hash"]
+              raw = xml_path.read_bytes()
+              xml_hash = compute_hash(raw)
+              consolidated_as_of = fr.get("consolidated_as_of") or extract_consolidation_date(raw) or str(date.today())
               chunks = parse_ita_xml(
                   xml_path=xml_path,
                   language="fr",
-                  valid_from=str(date.today()),
+                  valid_from=consolidated_as_of,
                   amending_act=os.getenv("AMENDING_ACT", ""),
               )
               summary = run_ingestion(
                   chunks=chunks,
                   language="fr",
                   act="ITA",
-                  consolidated_as_of=str(date.today()),
+                  consolidated_as_of=consolidated_as_of,
                   amending_act=os.getenv("AMENDING_ACT", ""),
                   source_url=fr["url"],
                   xml_version_hash=xml_hash,
@@ -183,7 +187,7 @@ jobs:
               Removed:  ${{ steps.ingest_en.outputs.chunks_removed }}
               Total:    ${{ steps.ingest_en.outputs.chunk_count }}
 
-            Source: https://laws-justice.gc.ca/eng/acts/I-3.3/FullText.xml
+            Source: https://laws-lois.justice.gc.ca/eng/XML/I-3.3.xml
 
             Ingestion ran automatically via GitHub Actions.
 
