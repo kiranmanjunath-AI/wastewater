@@ -186,8 +186,8 @@ def print_report(results: dict) -> None:
     mrr_ok = "PASS" if mrr >= 0.75 else "FAIL"
 
     print(f"\nOverall  (n={n})")
-    print(f"  Recall@3 : {r3:.4f}   target ≥ 0.85  [{r3_ok}]")
-    print(f"  MRR      : {mrr:.4f}   target ≥ 0.75  [{mrr_ok}]")
+    print(f"  Recall@3 : {r3:.4f}   target >= 0.85  [{r3_ok}]")
+    print(f"  MRR      : {mrr:.4f}   target >= 0.75  [{mrr_ok}]")
 
     print(f"\nPer-topic breakdown:")
     header = f"  {'Topic':25s} {'n':>4}  {'Recall@3':>10}  {'MRR':>8}"

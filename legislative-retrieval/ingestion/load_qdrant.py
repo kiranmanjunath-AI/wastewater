@@ -120,9 +120,23 @@ def ensure_collection(client) -> None:
     print(f"[qdrant] Collection created with payload indexes.")
 
 
-def upsert_chunks(client, model, chunks: list[dict], sparse_matrix=None, start_id: int = 0) -> int:
+_CHUNK_NS = uuid.UUID("c0a1b2c3-d4e5-f6a7-b8c9-d0e1f2a3b4c5")
+
+
+def _chunk_point_id(chunk: dict) -> str:
+    """
+    Deterministic UUID for a chunk derived from its content hash.
+    Using uuid5 ensures the same chunk always maps to the same ID across
+    re-ingestion runs, making upsert idempotent and eliminating ID collisions
+    between EN and FR (which have different version_hash values).
+    """
+    return str(uuid.uuid5(_CHUNK_NS, chunk["version_hash"]))
+
+
+def upsert_chunks(client, model, chunks: list[dict], sparse_matrix=None) -> int:
     """
     Embed and upsert chunks into Qdrant with named dense + optional BM25 sparse vectors.
+    Point IDs are deterministic UUIDs derived from each chunk's content hash.
     Returns the number of successfully upserted points.
     """
     from qdrant_client.models import PointStruct, SparseVector
@@ -138,7 +152,7 @@ def upsert_chunks(client, model, chunks: list[dict], sparse_matrix=None, start_i
         points = []
         for i, (chunk, dense_vec) in enumerate(zip(batch, dense_vectors)):
             abs_idx = batch_start + i
-            point_id = start_id + abs_idx
+            point_id = _chunk_point_id(chunk)
 
             vector_dict: dict = {"dense": dense_vec}
             if sparse_matrix is not None:
@@ -293,14 +307,7 @@ def run_ingestion(
 
     print(f"[ingest] Delta: +{added} added, -{removed} removed, {unchanged} unchanged")
 
-    # Determine current max ID to avoid collisions
-    try:
-        count_result = client.count(collection_name=COLLECTION_NAME)
-        start_id = count_result.count
-    except Exception:
-        start_id = 0
-
-    upserted = upsert_chunks(client, model, chunks, sparse_matrix=sparse_matrix, start_id=start_id)
+    upserted = upsert_chunks(client, model, chunks, sparse_matrix=sparse_matrix)
     print(f"[ingest] Upserted {upserted} chunks total.")
 
     version_id = str(uuid.uuid4())
