@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_PATH = os.getenv("QDRANT_PATH", "")  # If set, use embedded local storage (no Docker)
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "legislation_chunks")
 
 
@@ -36,8 +37,12 @@ def _get_model():
 
 @lru_cache(maxsize=1)
 def _get_qdrant_client():
-    """Create and cache the Qdrant client."""
+    """Create and cache the Qdrant client (embedded or remote)."""
     from qdrant_client import QdrantClient
+    from pathlib import Path
+    if QDRANT_PATH:
+        Path(QDRANT_PATH).mkdir(parents=True, exist_ok=True)
+        return QdrantClient(path=QDRANT_PATH)
     return QdrantClient(url=QDRANT_URL, timeout=15)
 
 
@@ -51,29 +56,48 @@ def embed_query(query: str) -> list[float]:
     return vector.tolist()
 
 
-def _build_filter(language: str, as_of: str) -> dict:
-    """
-    Build the Qdrant filter dict for a retrieve request.
+@lru_cache(maxsize=4)
+def _get_vectorizer(language: str):
+    """Load the pre-fitted TF-IDF vectorizer for sparse BM25 query encoding."""
+    import pickle
+    from pathlib import Path
 
-    Conditions:
-      - language == req.language
-      - valid_from <= as_of  (stored as ISO string, YYYY-MM-DD)
-      - valid_to > as_of OR valid_to is null (still valid / no expiry)
+    vec_path = Path(os.getenv("DATA_DIR", "./data")) / f"tfidf_{language}.pkl"
+    if vec_path.exists():
+        print(f"[retriever] Loading TF-IDF vectorizer for '{language}' ...")
+        with open(vec_path, "rb") as f:
+            return pickle.load(f)
+    return None
 
-    Because Qdrant string comparisons are lexicographic and ISO dates
-    sort correctly as strings, we use Range conditions.
+
+def embed_query_sparse(query: str, language: str) -> Optional[tuple[list[int], list[float]]]:
     """
-    return {
-        "must": [
-            {"key": "language", "match": {"value": language}},
-            {"key": "valid_from", "range": {"lte": as_of}},
-        ],
-        "should": [
-            {"key": "valid_to", "is_null": {}},
-            {"key": "valid_to", "range": {"gt": as_of}},
-        ],
-        "minimum_should": 1,
-    }
+    Compute a TF-IDF sparse vector for the query.
+    Returns (indices, values) or None if no vectorizer is available.
+    """
+    vectorizer = _get_vectorizer(language)
+    if vectorizer is None:
+        return None
+    row = vectorizer.transform([query])
+    cx = row.tocoo()
+    if cx.nnz == 0:
+        return None
+    return cx.col.tolist(), cx.data.tolist()
+
+
+def _build_filter(language: str, as_of: str, act: Optional[str] = None):
+    """
+    Build the Qdrant filter for a retrieve request.
+
+    V1 prototype: single consolidated version, all chunks have valid_to=None.
+    Filter by language and act only.  Temporal range filtering (valid_from/valid_to)
+    requires storing dates as numeric timestamps; deferred to V1-production.
+    """
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
+    must = [FieldCondition(key="language", match=MatchValue(value=language))]
+    if act:
+        must.append(FieldCondition(key="act", match=MatchValue(value=act)))
+    return Filter(must=must)
 
 
 def search(
@@ -96,20 +120,44 @@ def search(
         as_of = date.today().isoformat()
 
     query_vector = embed_query(query)
-    qdrant_filter = _build_filter(language, as_of)
+    qdrant_filter = _build_filter(language, as_of, act)
+    sparse = embed_query_sparse(query, language)
 
-    # If an act filter is provided, add it to the must conditions
-    if act:
-        qdrant_filter["must"].append({"key": "act", "match": {"value": act}})
+    if sparse is not None:
+        from qdrant_client.models import Fusion, FusionQuery, Prefetch, SparseVector
 
-    raw_results = client.search(
-        collection_name=COLLECTION_NAME,
-        query_vector=query_vector,
-        query_filter=qdrant_filter,
-        limit=top_k,
-        with_payload=True,
-        with_vectors=False,
-    )
+        sparse_indices, sparse_values = sparse
+        raw_results = client.query_points(
+            collection_name=COLLECTION_NAME,
+            prefetch=[
+                Prefetch(
+                    query=query_vector,
+                    using="dense",
+                    filter=qdrant_filter,
+                    limit=top_k * 5,
+                ),
+                Prefetch(
+                    query=SparseVector(indices=sparse_indices, values=sparse_values),
+                    using="bm25",
+                    filter=qdrant_filter,
+                    limit=top_k * 5,
+                ),
+            ],
+            query=FusionQuery(fusion=Fusion.RRF),
+            limit=top_k,
+            with_payload=True,
+            with_vectors=False,
+        ).points
+    else:
+        raw_results = client.query_points(
+            collection_name=COLLECTION_NAME,
+            query=query_vector,
+            using="dense",
+            query_filter=qdrant_filter,
+            limit=top_k,
+            with_payload=True,
+            with_vectors=False,
+        ).points
 
     results = []
     for hit in raw_results:

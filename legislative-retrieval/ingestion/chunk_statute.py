@@ -211,6 +211,64 @@ def _paragraph_text(para_node) -> str:
     return combined
 
 
+def _chunks_from_definitions_subsection(
+    sub_node,
+    sub_label: str,
+    section_label: str,
+    context_prefix: str,
+    part_label: str,
+    division_label: str,
+    language: str,
+    valid_from: str,
+    amending_act: str,
+    act: str = "ITA",
+) -> list[dict]:
+    """
+    Process a subsection whose children are <Definition> elements (e.g., ITA s.248(1)).
+    Produces one chunk per defined term rather than one giant blob.
+    """
+    chunks = []
+    term_tag = "DefinedTermEn" if language == "en" else "DefinedTermFr"
+
+    for child in sub_node:
+        if local(child) != "Definition":
+            continue
+
+        # Extract term name from <Text><DefinedTermEn|Fr>…</Text>
+        term = ""
+        text_el = find_first_child(child, "Text")
+        if text_el is not None:
+            te = find_first_child(text_el, term_tag)
+            if te is None:
+                te = find_first_child(text_el, "DefinedTermEn", "DefinedTermFr")
+            if te is not None:
+                term = (te.text or "").strip()
+
+        full_text = collect_text(child)
+        if not full_text.strip():
+            continue
+
+        def_context = f"Definition of '{term}' [{context_prefix}]" if term else context_prefix
+        chunks.append(
+            make_chunk(
+                text=full_text.strip(),
+                context_prefix=def_context,
+                citation=build_citation(section_label, sub_label),
+                act=act,
+                part=part_label,
+                division=division_label,
+                section=section_label,
+                subsection=sub_label,
+                paragraph=None,
+                language=language,
+                valid_from=valid_from,
+                amending_act=amending_act,
+            )
+        )
+
+    return chunks
+
+
 def chunks_from_subsection(
     sub_node,
     sub_label: str,
@@ -229,6 +287,21 @@ def chunks_from_subsection(
     If total tokens <= SUBSECTION_TOKEN_LIMIT, one chunk for the whole subsection.
     Otherwise, split at <Paragraph> boundaries.
     """
+    # Definitions subsection: delegate each <Definition> to its own chunk
+    if any(local(c) == "Definition" for c in sub_node):
+        return _chunks_from_definitions_subsection(
+            sub_node=sub_node,
+            sub_label=sub_label,
+            section_label=section_label,
+            context_prefix=context_prefix,
+            part_label=part_label,
+            division_label=division_label,
+            language=language,
+            valid_from=valid_from,
+            amending_act=amending_act,
+            act=act,
+        )
+
     # Intro text: <Text> children before any <Paragraph>
     intro_parts = []
     paragraphs = []
