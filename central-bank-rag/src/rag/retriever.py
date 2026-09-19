@@ -27,7 +27,10 @@ DEFAULT_TOP_N = 12   # final chunks passed to the generator
 # Primary announcement documents get a score boost so they surface
 # over longer contextual documents (minutes, deliberations) when both
 # are semantically close to the query.
-ANNOUNCEMENT_TYPES = frozenset({"FOMC Statement", "Rate Decision Statement"})
+# Ordered: FOMC first so its injection displaces weak slots before BoC
+# evaluates its own coverage.  The current_cids guard then correctly detects
+# any BoC chunks displaced by FOMC and re-injects them.
+ANNOUNCEMENT_TYPES = ("FOMC Statement", "Rate Decision Statement")
 ANNOUNCEMENT_BOOST = 2.0
 
 # BM25 query expansion: central-bank decision documents use different
@@ -192,21 +195,24 @@ class Retriever:
                 score *= ANNOUNCEMENT_BOOST
             rrf_scores[cid] = score
 
-        ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
+        # Deduplicate over the full RRF pool so we always surface top_n
+        # *unique-document* results.  Slicing to top_n before dedup meant
+        # that duplicate chunks from the same doc ate slots, leaving fewer
+        # than top_n unique results and starving the injection of padding slots.
+        ranked_raw = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
 
-        # Deduplicate: keep only the highest-scoring chunk per source document.
-        # RRF may surface two chunks from the same document (e.g. BM25 matches
-        # two passages from the same Rate Decision Statement), wasting a slot.
         seen_docs: set[str] = set()
         deduped: list[tuple[str, float]] = []
-        for cid, score in ranked:
+        for cid, score in ranked_raw:
             chunk = self._chunk_map.get(cid)
             if not chunk:
                 continue
             if chunk.doc_id not in seen_docs:
                 deduped.append((cid, score))
                 seen_docs.add(chunk.doc_id)
-        ranked = deduped[:top_n]
+            if len(deduped) >= top_n:
+                break
+        ranked = deduped
 
         # Anchor injection: ensure each primary announcement type appears in
         # the results even when those brief documents rank far below the dense
@@ -235,6 +241,7 @@ class Retriever:
         if not doc_type:  # skip when caller already filtered to one doc_type
             ranked_set = {cid for cid, _ in ranked}
             inject_slot = len(ranked) - 1
+            log.debug("INJECT: ranked=%d, inject_slot=%d", len(ranked), inject_slot)
 
             for a_type in ANNOUNCEMENT_TYPES:
                 if inject_slot < 0:
@@ -246,44 +253,59 @@ class Retriever:
 
                 all_type = self._collection.get(where=sub_where, include=["metadatas"])
 
-                # Find which source-document IDs of this type are already
-                # organically represented so we never inject a second chunk
-                # from the same meeting that is already in results.
+                # Reflect the *current* state of ranked after any prior injection.
+                # ranked_set tracks "ever seen" so prior-type injection may have
+                # displaced chunks that ranked_set still claims are present.
+                # Using the live ranked list avoids false "already covered" signals.
+                current_cids = {cid for cid, _ in ranked}
+
+                # Find which source-document IDs of this type are currently
+                # in the ranked list so we never inject a second chunk from
+                # the same meeting that is already represented.
                 organic_doc_ids_of_type = {
                     self._chunk_map[cid].doc_id
-                    for cid in ranked_set
+                    for cid in current_cids
                     if self._chunk_map.get(cid)
                     and self._chunk_map[cid].doc_type == a_type
                 }
 
                 # Build a map: document-date → first valid chunk id, skipping
-                # entire documents that are already organically covered.
+                # entire documents that are currently in ranked results.
                 date_to_cid: dict[str, str] = {}
                 for cid, meta in zip(all_type["ids"], all_type["metadatas"]):
-                    if cid in ranked_set or cid not in self._chunk_map:
+                    if cid in current_cids or cid not in self._chunk_map:
                         continue
                     c = self._chunk_map[cid]
                     if c.doc_id in organic_doc_ids_of_type:
-                        continue  # another chunk of this doc is already organic
+                        continue  # another chunk of this doc is already in results
                     if not self._chunk_matches(c, institution, doc_type, date_from, date_to):
                         continue
                     if c.date not in date_to_cid:
                         date_to_cid[c.date] = cid
 
+                log.debug("  %s: organic_doc_ids=%d, candidates=%d %s",
+                          a_type, len(organic_doc_ids_of_type), len(date_to_cid),
+                          sorted(date_to_cid.keys()))
+
                 if not date_to_cid:
+                    log.debug("  %s: SKIP empty candidates", a_type)
                     continue
 
                 # Skip injection only if the most-recent available date is
-                # already organically covered — that implies good temporal reach.
+                # already in the current ranked results.
                 if organic_doc_ids_of_type:
                     organic_dates = {
                         self._chunk_map[cid].date
-                        for cid in ranked_set
+                        for cid in current_cids
                         if self._chunk_map.get(cid)
                         and self._chunk_map[cid].doc_type == a_type
                     }
                     most_recent_overall = max(set(date_to_cid) | organic_dates)
+                    log.debug("  %s: most_recent=%s in_organic=%s organic=%s",
+                              a_type, most_recent_overall,
+                              most_recent_overall in organic_dates, sorted(organic_dates))
                     if most_recent_overall in organic_dates:
+                        log.debug("  %s: SKIP guard fired", a_type)
                         continue  # most-recent meeting already represented
 
                 unique_dates = sorted(date_to_cid.keys())
@@ -305,7 +327,11 @@ class Retriever:
                         n - 1,
                     })
 
-                inject_cids = [date_to_cid[unique_dates[i]] for i in sample_indices]
+                # Inject newest-first so that if we run out of slots the most
+                # recent date (n-1) is guaranteed a slot rather than dropped.
+                inject_cids = [date_to_cid[unique_dates[i]] for i in reversed(sample_indices)]
+                inject_dates = [unique_dates[i] for i in reversed(sample_indices)]
+                log.debug("  %s: n=%d inject_slot=%d inject_dates=%s", a_type, n, inject_slot, inject_dates)
 
                 for cid in inject_cids:
                     if inject_slot < 0:

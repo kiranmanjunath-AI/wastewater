@@ -3,3 +3,11 @@ __pycache__/
 chart_data.json
 node_modules/
 .claude/
+
+# Secrets and local config
+.env
+*.env
+
+# Generated data (Qdrant DB, TF-IDF pickle, downloaded XML)
+legislative-retrieval/data/
+central-bank-rag/data/
