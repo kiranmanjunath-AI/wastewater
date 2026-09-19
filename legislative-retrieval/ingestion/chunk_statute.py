@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -108,14 +109,26 @@ def sha256_hex(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+_FRACTION_MAP = {
+    "½": "one-half",   # ½
+    "⅓": "one-third",  # ⅓
+    "⅔": "two-thirds", # ⅔
+    "¼": "one-quarter", # ¼
+    "¾": "three-quarters", # ¾
+}
+_FRACTION_TABLE = str.maketrans(_FRACTION_MAP)
+
+
 def collect_text(node, exclude_tags=frozenset(EXCLUDED_TAGS)) -> str:
     """
     Recursively collect all text under node, skipping excluded tags.
-    Collapses whitespace.
+    Collapses whitespace. Normalises Unicode fraction characters to words
+    so that BM25 tokenisation can match them.
     """
     parts = []
     _collect_text_into(node, parts, exclude_tags)
-    return " ".join(" ".join(parts).split())
+    raw = " ".join(" ".join(parts).split())
+    return raw.translate(_FRACTION_TABLE)
 
 
 def _collect_text_into(node, parts: list, exclude_tags: frozenset):
@@ -144,6 +157,33 @@ def build_citation(
     if subparagraph:
         cit += f"({subparagraph})"
     return cit
+
+
+_PARA_TOPIC_PATTERNS = [
+    (re.compile(r"\bprincipal residence\b", re.IGNORECASE), "principal residence"),
+    (re.compile(r"\brent[s,]?\s+royalt|\broyalt", re.IGNORECASE), "rents and royalties"),
+    (re.compile(r"\binterest\b.{0,60}\bborrow|\bborrow.{0,60}\binterest", re.IGNORECASE), "interest on borrowed money"),
+    (re.compile(r"\bnet capital loss", re.IGNORECASE), "net capital losses"),
+    (re.compile(r"\ballowable capital loss", re.IGNORECASE), "allowable capital losses"),
+    (re.compile(r"\btaxable capital gain", re.IGNORECASE), "taxable capital gains"),
+    # RRSP maturity — s.146(2)(b.4) says "the plan matures not later than December 31
+    # of the calendar year in which the annuitant attains 71 years of age".
+    # Hint bridges the query "RRSP converted/matured" to ITA vocabulary "matures/maturity".
+    (re.compile(r"\bplan matures|maturity date.{0,80}retirement savings|retirement savings.{0,80}maturity\b", re.IGNORECASE), "RRSP maturity date retirement income options"),
+    # RRSP over-contribution tax — s.204.1 imposes tax on cumulative excess RRSP amounts.
+    # Hint distinguishes s.204.1 from s.204.2 ("Cumulative excess amounts" formula) and
+    # s.207.01 (TFSA over-contribution, similar structure).
+    (re.compile(r"\bcumulative excess amount.{0,80}registered retirement savings|registered retirement savings.{0,80}cumulative excess amount", re.IGNORECASE), "RRSP over-contribution cumulative excess tax payable"),
+]
+
+
+def _para_topic_hints(text: str) -> str:
+    """Return a short topic string for known ITA concepts found in paragraph text."""
+    seen = []
+    for pat, label in _PARA_TOPIC_PATTERNS:
+        if pat.search(text) and label not in seen:
+            seen.append(label)
+    return " | ".join(seen)
 
 
 def make_chunk(
@@ -248,7 +288,11 @@ def _chunks_from_definitions_subsection(
         if not full_text.strip():
             continue
 
-        def_context = f"Definition of '{term}' [{context_prefix}]" if term else context_prefix
+        # Include the section citation in def_context so query expansion can
+        # specifically target s.248(1) general definitions vs. local definitions
+        # in other sections that also appear as "Definition of 'X' [...]".
+        def_cite = build_citation(section_label, sub_label)
+        def_context = f"Definition of '{term}' [{context_prefix}] [{def_cite}]" if term else context_prefix
         chunks.append(
             make_chunk(
                 text=full_text.strip(),
@@ -287,13 +331,24 @@ def chunks_from_subsection(
     If total tokens <= SUBSECTION_TOKEN_LIMIT, one chunk for the whole subsection.
     Otherwise, split at <Paragraph> boundaries.
     """
+    # Use subsection-level MarginalNote when available — it provides more specific
+    # context than the section title for sections like s.146 ("Definitions") or
+    # s.212 ("Tax") where each subsection covers a distinct topic.
+    sub_marg = find_first_child(sub_node, "MarginalNote")
+    sub_marg_text = collect_text(sub_marg).strip() if sub_marg is not None else ""
+    citation_for_context = build_citation(section_label, sub_label)
+    if sub_marg_text:
+        effective_context = f"{sub_marg_text} [{citation_for_context}]"
+    else:
+        effective_context = context_prefix
+
     # Definitions subsection: delegate each <Definition> to its own chunk
     if any(local(c) == "Definition" for c in sub_node):
         return _chunks_from_definitions_subsection(
             sub_node=sub_node,
             sub_label=sub_label,
             section_label=section_label,
-            context_prefix=context_prefix,
+            context_prefix=effective_context,
             part_label=part_label,
             division_label=division_label,
             language=language,
@@ -312,7 +367,7 @@ def chunks_from_subsection(
         if tag == "Label":
             continue
         elif tag == "MarginalNote":
-            continue  # subsection headings are already in context_prefix at section level
+            continue  # already captured in effective_context above
         elif tag == "Text" and not paragraphs:
             intro_parts.append(collect_text(child))
         elif tag == "Paragraph":
@@ -333,7 +388,7 @@ def chunks_from_subsection(
         citation = build_citation(section_label, sub_label)
         return [make_chunk(
             text=text.strip(),
-            context_prefix=context_prefix,
+            context_prefix=effective_context,
             citation=citation,
             act=act, part=part_label, division=division_label,
             section=section_label, subsection=sub_label, paragraph=None,
@@ -348,22 +403,31 @@ def chunks_from_subsection(
         citation = build_citation(section_label, sub_label)
         return [make_chunk(
             text=all_text.strip(),
-            context_prefix=context_prefix,
+            context_prefix=effective_context,
             citation=citation,
             act=act, part=part_label, division=division_label,
             section=section_label, subsection=sub_label, paragraph=None,
             language=language, valid_from=valid_from, amending_act=amending_act,
         )]
 
-    # Split at paragraph boundaries; attach continuation to last paragraph
+    # Split at paragraph boundaries; attach continuation to last paragraph.
+    # Non-first paragraphs get a truncated intro so preamble keywords (e.g.
+    # "non-resident", "deducted") are present in their chunk text for BM25/CE.
+    _INTRO_TRUNCATE_WORDS = 40
+    intro_truncated = intro_text
+    if intro_text:
+        words = intro_text.split()
+        if len(words) > _INTRO_TRUNCATE_WORDS:
+            intro_truncated = " ".join(words[:_INTRO_TRUNCATE_WORDS]) + "…"
+
     chunks = []
     items = list(para_texts.items())
     for i, (p_label, p_text) in enumerate(items):
         is_first = i == 0
         is_last = i == len(items) - 1
         parts = []
-        if is_first and intro_text:
-            parts.append(intro_text)
+        if intro_text:
+            parts.append(intro_text if is_first else intro_truncated)
         parts.append(p_text)
         if is_last and continuation_text:
             parts.append(continuation_text)
@@ -371,9 +435,11 @@ def chunks_from_subsection(
         if not combined:
             continue
         citation = build_citation(section_label, sub_label, p_label)
+        hints = _para_topic_hints(combined)
+        para_context = (effective_context + " | " + hints) if hints else effective_context
         chunks.append(make_chunk(
             text=combined,
-            context_prefix=context_prefix,
+            context_prefix=para_context,
             citation=citation,
             act=act, part=part_label, division=division_label,
             section=section_label, subsection=sub_label, paragraph=p_label,

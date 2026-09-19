@@ -11,7 +11,9 @@ Pipeline:
 
 from __future__ import annotations
 
+import math
 import os
+import re
 from datetime import date, datetime, timezone
 from functools import lru_cache
 from typing import Optional
@@ -46,6 +48,61 @@ def _get_qdrant_client():
     return QdrantClient(url=QDRANT_URL, timeout=15)
 
 
+def _expand_query(query: str) -> str:
+    # Expansion 1: define X -> Definition of X  (stemming gap: define != definition for BM25)
+    # Expansion 2: fraction -> one-half half  (ITA uses Unicode 1/2 char, normalised in chunks)
+    # Expansion 3: RRSP converted/matured -> maturity annuity RRIF  (ITA uses "maturity" not "converted")
+    # Expansion 4: capital loss applied -> allowable net s.3 s.111  (conceptual vocabulary gap)
+    # Expansion 5: interest borrowed money -> paragraph 20(1)(c)  (s.20.1 drowns out s.20(1)(c))
+    expanded = query
+    quote_chars = chr(0x27) + chr(0x2018) + chr(0x2019) + chr(0x201c) + chr(0x201d)
+    m = re.search(
+        r"defin[a-z]*\s+(?:of\s+)?[" + quote_chars + r"]?"
+        r"([a-zA-Z][a-zA-Z\s\-]*?)"
+        r"[" + quote_chars + r"]?\s*(?:\?|under|in\s+the|$)",
+        query,
+        re.IGNORECASE,
+    )
+    if m:
+        term = m.group(1).strip()
+        if 2 <= len(term) <= 40:
+            # "Part XVII" and "ITA s.248" target s.248(1) (the general definitions
+            # section) over local definitions in other sections that also say "Definition of X".
+            # "means" matches s.248(1) text ("X means...") vs. local defs that say
+            # "has the same meaning as in subsection 248(1)".
+            expanded = expanded + " Definition of '" + term + "' Part XVII ITA s.248 means"
+    if re.search(r"fraction", query, re.IGNORECASE):
+        expanded = expanded + " one-half half"
+    if re.search(r"RRSP", query, re.IGNORECASE) and re.search(r"convert|matur|option", query, re.IGNORECASE):
+        # s.146(2): "maturity date is no later than the end of the calendar year in which
+        # the annuitant attains 71 years of age"; s.146(3) lists options (life annuity, term
+        # annuity, retirement income fund).
+        expanded = expanded + " maturity annuity RRIF retirement income fund maturity date annuitant 71 calendar year"
+    if re.search(r"over.contribut|excess.*RRSP|RRSP.*excess", query, re.IGNORECASE):
+        # s.204.1 imposes tax on cumulative excess RRSP amounts; its context prefix
+        # is "Tax payable by individuals -- contributions after 1990", which distinguishes
+        # it from s.204.2 ("Cumulative excess amounts" — the computation formula).
+        expanded = expanded + " cumulative excess amount registered retirement savings plans tax payable individual over-contribution penalty Part X.1"
+    if re.search(r"capital loss", query, re.IGNORECASE) and re.search(r"applied|offset|against", query, re.IGNORECASE):
+        expanded = expanded + " allowable capital losses net capital loss deductible"
+    if re.search(r"interest", query, re.IGNORECASE) and re.search(r"borrowed", query, re.IGNORECASE):
+        # "deductions permitted computing income business property" targets s.20(1)(c) context prefix
+        # over s.20.1 ("Borrowed money used to earn income from property — Lost source").
+        expanded = expanded + " legal obligation interest paid borrowed money deductions permitted computing income business property"
+    # Employment income computation -> ITA s.5(1) vocabulary
+    if re.search(r"employ\w*\s+income|income.*employ", query, re.IGNORECASE) and re.search(r"include|comput", query, re.IGNORECASE):
+        expanded = expanded + " salary wages remuneration gratuities office employment"
+    # Part XIII withholding (royalties / interest) -> boost s.212(1) chunks
+    # s.212(1) text: "Every non-resident person shall pay an income tax of 25%..."
+    if re.search(r"royalt", query, re.IGNORECASE) and re.search(r"non.resid|withhold", query, re.IGNORECASE):
+        expanded = expanded + " Part XIII rent royalty payment non-resident shall pay income tax"
+    if re.search(r"Part XIII|withholding.*interest|interest.*withhold", query, re.IGNORECASE):
+        expanded = expanded + " Part XIII non-resident person shall pay income tax interest"
+    # Principal residence exemption -> s.40(2)(b) vocabulary
+    if re.search(r"principal residence", query, re.IGNORECASE):
+        expanded = expanded + " principal residence gain disposition exempt years owned"
+    return expanded
+
 def embed_query(query: str) -> list[float]:
     """
     Embed a query string using the E5 query instruction prefix.
@@ -54,6 +111,20 @@ def embed_query(query: str) -> list[float]:
     model = _get_model()
     vector = model.encode(f"query: {query}", normalize_embeddings=True)
     return vector.tolist()
+
+
+@lru_cache(maxsize=1)
+def _get_cross_encoder():
+    """Load a cross-encoder model for reranking; returns None if unavailable."""
+    try:
+        from sentence_transformers import CrossEncoder
+        print("[retriever] Loading cross-encoder model ...")
+        model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", max_length=512)
+        print("[retriever]   Cross-encoder ready.")
+        return model
+    except Exception as exc:
+        print(f"[retriever] WARNING: Cross-encoder unavailable ({exc}), falling back to RRF.")
+        return None
 
 
 @lru_cache(maxsize=4)
@@ -108,7 +179,8 @@ def search(
     act: Optional[str] = "ITA",
 ) -> list[dict]:
     """
-    Perform a cosine similarity search over legislation_chunks.
+    Perform a hybrid search (dense + BM25 RRF) over legislation_chunks,
+    then optionally rerank with a cross-encoder for higher precision.
 
     Returns a list of dicts, each containing:
       citation, text, score, language, valid_from, valid_to,
@@ -119,9 +191,14 @@ def search(
     if as_of is None:
         as_of = date.today().isoformat()
 
-    query_vector = embed_query(query)
+    expanded = _expand_query(query)
+    query_vector = embed_query(expanded)
     qdrant_filter = _build_filter(language, as_of, act)
-    sparse = embed_query_sparse(query, language)
+    sparse = embed_query_sparse(expanded, language)
+
+    # Retrieve a larger candidate pool for cross-encoder reranking.
+    # 200 candidates (vs. 100) ensures sections that rank ~50 in RRF still reach CE.
+    candidate_k = top_k * 20
 
     if sparse is not None:
         from qdrant_client.models import Fusion, FusionQuery, Prefetch, SparseVector
@@ -134,17 +211,17 @@ def search(
                     query=query_vector,
                     using="dense",
                     filter=qdrant_filter,
-                    limit=top_k * 5,
+                    limit=candidate_k,
                 ),
                 Prefetch(
                     query=SparseVector(indices=sparse_indices, values=sparse_values),
                     using="bm25",
                     filter=qdrant_filter,
-                    limit=top_k * 5,
+                    limit=candidate_k,
                 ),
             ],
             query=FusionQuery(fusion=Fusion.RRF),
-            limit=top_k,
+            limit=candidate_k,
             with_payload=True,
             with_vectors=False,
         ).points
@@ -154,15 +231,15 @@ def search(
             query=query_vector,
             using="dense",
             query_filter=qdrant_filter,
-            limit=top_k,
+            limit=candidate_k,
             with_payload=True,
             with_vectors=False,
         ).points
 
-    results = []
+    candidates = []
     for hit in raw_results:
         p = hit.payload or {}
-        results.append({
+        candidates.append({
             "citation": p.get("citation", ""),
             "text": p.get("text", ""),
             "score": round(float(hit.score), 6),
@@ -177,7 +254,27 @@ def search(
             "division": p.get("division"),
         })
 
-    return results
+    # Cross-encoder reranking: blend CE scores with RRF scores to avoid regressions.
+    # Pure CE reranking can over-promote specific sections over general foundational ones.
+    # Blending (70% CE, 30% RRF) preserves strong prior-stage rankings while still
+    # letting CE correct errors where the right section is ranked but not top-3.
+    cross_encoder = _get_cross_encoder()
+    if cross_encoder is not None and candidates:
+        rrf_scores = [c["score"] for c in candidates]
+        max_rrf = max(rrf_scores) if rrf_scores else 1.0
+
+        pairs = [(expanded, c["text"]) for c in candidates]
+        ce_raw = cross_encoder.predict(pairs).tolist()
+        # Normalise CE logits to (0,1) via sigmoid
+        ce_norm = [1.0 / (1.0 + math.exp(-s)) for s in ce_raw]
+        rrf_norm = [s / max_rrf for s in rrf_scores]
+
+        for c, ce_n, rrf_n in zip(candidates, ce_norm, rrf_norm):
+            c["score"] = round(0.70 * ce_n + 0.30 * rrf_n, 6)
+
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+
+    return candidates[:top_k]
 
 
 def get_consolidated_as_of(act: str = "ITA", language: str = "en") -> Optional[str]:
