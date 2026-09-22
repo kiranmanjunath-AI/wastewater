@@ -11,10 +11,11 @@ Pulls virus concentration data from public wastewater monitoring programs, maps 
 
 ## Data sources
 
-| Source | What it covers |
-|---|---|
-| [CDC NWSS](https://data.cdc.gov/resource/g653-rqe2.json) | COVID-19 concentration across US treatment plants, 2021–present |
-| [CA CDPH Wastewater Surveillance](https://data.chhs.ca.gov/dataset/a6ca879a-6014-4b72-9ea6-07ef8b87ae83) | Multi-pathogen (COVID-19, Flu A, RSV, Bird Flu H5) across California sites, 2023–present |
+| Source | Dataset | What it covers |
+|---|---|---|
+| [CDC NWSS — Concentrations](https://data.cdc.gov/Public-Health-Surveillance/NWSS-Public-SARS-CoV-2-Concentration-in-Wastewater/g653-rqe2) | `g653-rqe2` | Per-sample virus concentrations across US treatment plants |
+| [CDC NWSS — Site Metadata](https://data.cdc.gov/Public-Health-Surveillance/NWSS-Public-SARS-CoV-2-Wastewater-Metric-Data/2ew6-ywp6) | `2ew6-ywp6` | Treatment plant IDs, jurisdictions, population served — joined to concentrations on `key_plot_id` |
+| [CA CDPH Wastewater Surveillance](https://data.chhs.ca.gov/dataset/a6ca879a-6014-4b72-9ea6-07ef8b87ae83) | CSV download | Multi-pathogen (COVID-19, Flu A, RSV, Bird Flu H5) across California sites, 2023–present |
 
 ## Setup
 
@@ -38,9 +39,9 @@ df.to_csv("wastewater_combined.csv", index=False)
 
 ## Viewing the chart
 
-Then open `wastewater_watch.html` in your browser.
+**Live:** https://kiranmanjunath-ai.github.io/wastewater/
 
-The page contains two charts built from an embedded data snapshot (no live API calls):
+Or open `index.html` locally in any browser. The page contains two charts built from an embedded data snapshot (no live API calls):
 
 1. **COVID-19 in US wastewater, 2021–2025** — monthly median concentration across CDC-monitored plants, with variant wave annotations
 2. **What's circulating in California** — weekly levels for COVID-19, Flu A, RSV, and Bird Flu H5, each normalized to % of its own historical peak
