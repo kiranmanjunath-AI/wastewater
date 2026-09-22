@@ -1,0 +1,505 @@
+<title>Wastewater Watch</title>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;1,400&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap">
+
+<style>
+/* === TOKENS === */
+:root {
+  color-scheme: light;
+  --bg:        #eef6f5;
+  --surface:   #ffffff;
+  --text-1:    #0a1f1e;
+  --text-2:    #3d6360;
+  --text-3:    #7a9d9b;
+  --accent:    #0b9e86;
+  --border:    #cce0de;
+  --grid:      rgba(10,31,30,0.07);
+  --axis:      #5a8482;
+  --anno:      #3d6360;
+  --c1:        #2a78d6;
+  --c2:        #eb6834;
+  --c3:        #1baf7a;
+  --c4:        #eda100;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg:        #071514;
+    --surface:   #0d2220;
+    --text-1:    #e4f2f0;
+    --text-2:    #7ab8b3;
+    --text-3:    #4a7a76;
+    --accent:    #14c4a4;
+    --border:    #1a3a37;
+    --grid:      rgba(228,242,240,0.07);
+    --axis:      #5a9490;
+    --anno:      #7ab8b3;
+    --c1:        #3987e5;
+    --c2:        #d95926;
+    --c3:        #199e70;
+    --c4:        #c98500;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:        #071514;
+  --surface:   #0d2220;
+  --text-1:    #e4f2f0;
+  --text-2:    #7ab8b3;
+  --text-3:    #4a7a76;
+  --accent:    #14c4a4;
+  --border:    #1a3a37;
+  --grid:      rgba(228,242,240,0.07);
+  --axis:      #5a9490;
+  --anno:      #7ab8b3;
+  --c1:        #3987e5;
+  --c2:        #d95926;
+  --c3:        #199e70;
+  --c4:        #c98500;
+}
+
+/* === BASE === */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text-1);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* === WRAP === */
+.wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+/* === HEADER === */
+.site-header { padding: 3.5rem 0 2.25rem; }
+
+.eyebrow {
+  display: block;
+  font-size: 0.67rem;
+  font-weight: 600;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 1rem;
+}
+
+.site-header h1 {
+  font-family: 'Spectral', Georgia, serif;
+  font-weight: 400;
+  font-size: clamp(1.6rem, 4vw, 2.45rem);
+  line-height: 1.22;
+  color: var(--text-1);
+  text-wrap: balance;
+  max-width: 680px;
+}
+.site-header h1 em { font-style: italic; color: var(--accent); }
+
+.header-body {
+  margin-top: 1rem;
+  font-size: 0.935rem;
+  color: var(--text-2);
+  max-width: 580px;
+  line-height: 1.65;
+}
+
+.header-rule {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2rem 0 0;
+}
+
+/* === SECTIONS === */
+.chart-section {
+  padding: 2.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.section-label {
+  font-size: 0.67rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 0.4rem;
+}
+
+.section-title {
+  font-family: 'Spectral', Georgia, serif;
+  font-weight: 600;
+  font-size: clamp(1rem, 2.5vw, 1.35rem);
+  line-height: 1.3;
+  color: var(--text-1);
+  margin-bottom: 0.3rem;
+  text-wrap: balance;
+}
+
+.section-sub {
+  font-size: 0.875rem;
+  color: var(--text-2);
+  line-height: 1.55;
+  max-width: 640px;
+  margin-bottom: 1.4rem;
+}
+
+/* === CHART CARD === */
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.5rem 1.25rem 0.75rem;
+  overflow: hidden;
+}
+
+.chart-svg { width: 100%; height: auto; display: block; overflow: visible; }
+
+/* === PATHOGEN GRID === */
+.pathogen-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+}
+@media (max-width: 520px) { .pathogen-grid { grid-template-columns: 1fr; } }
+
+.p-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.9rem 1rem 0.5rem;
+}
+
+.p-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.p-name {
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.p-status {
+  font-size: 0.77rem;
+  color: var(--text-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+.p-svg { width: 100%; height: auto; display: block; margin-top: 0.4rem; overflow: visible; }
+
+/* === TOOLTIP === */
+.tip {
+  position: fixed;
+  background: var(--text-1);
+  color: var(--bg);
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  padding: 0.4rem 0.65rem;
+  border-radius: 4px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.07s;
+  z-index: 999;
+  white-space: nowrap;
+}
+
+/* === FOOTER === */
+.page-footer {
+  padding: 2rem 0 3rem;
+  display: flex;
+  gap: 2rem 3rem;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+  margin-top: 2rem;
+}
+
+.src-block { flex: 1; min-width: 200px; }
+
+.src-label {
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 0.2rem;
+}
+
+.src-name { font-size: 0.82rem; color: var(--text-2); line-height: 1.45; }
+.data-note { width: 100%; font-size: 0.77rem; color: var(--text-3); }
+</style>
+
+<div class="tip" id="tip"></div>
+
+<div class="wrap">
+  <header class="site-header">
+    <span class="eyebrow">Disease Surveillance</span>
+    <h1>Your wastewater is an <em>early warning system</em> for outbreaks — before most people know they're sick.</h1>
+    <p class="header-body">Every day, viruses shed by infected people flow into the sewer system. Scientists can detect them in water samples days before cases show up in clinics or hospitals — giving communities a head start on what's coming.</p>
+    <hr class="header-rule">
+  </header>
+
+  <main>
+    <section class="chart-section">
+      <p class="section-label">National · COVID-19 · 2021–2025</p>
+      <h2 class="section-title">Five years of COVID-19 in US wastewater</h2>
+      <p class="section-sub">Monthly median virus concentration across CDC-monitored treatment plants. Each spike marks a variant wave — often detectable in sewers weeks before hospitals felt the surge.</p>
+      <div class="chart-card">
+        <svg id="covid-svg" class="chart-svg" aria-label="COVID-19 wastewater concentration trend, 2021 to 2025"></svg>
+      </div>
+    </section>
+
+    <section class="chart-section">
+      <p class="section-label">California · Five diseases · 2023–2026</p>
+      <h2 class="section-title">What's circulating in California's wastewater right now</h2>
+      <p class="section-sub">Each disease is shown as a percentage of its own highest recorded level, so all five are directly comparable. 100% means the worst week on record for that pathogen; 0% means none detected.</p>
+      <div class="pathogen-grid" id="pathogen-grid"></div>
+    </section>
+  </main>
+
+  <footer class="page-footer">
+    <div class="src-block">
+      <p class="src-label">Chart 1</p>
+      <p class="src-name">CDC National Wastewater Surveillance System (NWSS) — concentration dataset via data.cdc.gov</p>
+    </div>
+    <div class="src-block">
+      <p class="src-label">Chart 2</p>
+      <p class="src-name">CDPH Wastewater Surveillance, California — Drinking Water and Radiation Lab via data.chhs.ca.gov</p>
+    </div>
+    <p class="data-note">Data snapshot: August 2026. Monthly medians aggregated across monitored sites; not population-weighted. Chart 2 excludes sites reporting into CDC NWSS to avoid double-counting.</p>
+  </footer>
+</div>
+
+<script>
+/* === DATA === */
+const DATA = {"cdc":[{"date":"2021-02-01","value":121950.98696158336},{"date":"2021-03-01","value":117524.19469482759},{"date":"2021-04-01","value":750404.4001995688},{"date":"2021-05-01","value":1589477.687676696},{"date":"2021-06-01","value":342276.8374854486},{"date":"2021-07-01","value":1725378.8777482156},{"date":"2021-08-01","value":11383469.82098786},{"date":"2021-09-01","value":9050390.918875758},{"date":"2021-10-01","value":6776563.840661905},{"date":"2021-11-01","value":29112927.2445341},{"date":"2021-12-01","value":198112827.72833893},{"date":"2022-01-01","value":87828975.85714445},{"date":"2022-02-01","value":17148679.688824154},{"date":"2022-03-01","value":3917885.7733344594},{"date":"2022-04-01","value":13675707.201889016},{"date":"2022-05-01","value":29002395.48003175},{"date":"2022-06-01","value":61400705.38744339},{"date":"2022-07-01","value":94841813.23017438},{"date":"2022-08-01","value":60645683.94478483},{"date":"2022-09-01","value":20253343.81658701},{"date":"2022-10-01","value":14445194.470980192},{"date":"2022-11-01","value":25388977.23098654},{"date":"2022-12-01","value":60523495.2582198},{"date":"2023-01-01","value":16529037.81494446},{"date":"2023-02-01","value":30528417.15485924},{"date":"2023-03-01","value":29380920.396295145},{"date":"2023-04-01","value":7259317.589965404},{"date":"2023-05-01","value":5131635.137579137},{"date":"2023-06-01","value":4498495.715465865},{"date":"2023-07-01","value":8843973.012228131},{"date":"2023-08-01","value":15624171.724739913},{"date":"2023-09-01","value":45369503.36755526},{"date":"2023-10-01","value":31522293.09887694},{"date":"2023-11-01","value":20350654.19225715},{"date":"2023-12-01","value":93795948.6715678},{"date":"2024-01-01","value":77888717.1368739},{"date":"2024-02-01","value":40542249.448449954},{"date":"2024-03-01","value":26983218.63238707},{"date":"2024-04-01","value":9675148.417778028},{"date":"2024-05-01","value":8195115.362506812},{"date":"2024-06-01","value":15402208.220763482},{"date":"2024-07-01","value":34451468.323333345},{"date":"2024-08-01","value":49259473.140326165},{"date":"2024-09-01","value":44218553.636961505},{"date":"2024-10-01","value":10259721.390693543},{"date":"2024-11-01","value":13919106.368723318},{"date":"2024-12-01","value":29111508.395600222},{"date":"2025-01-01","value":41693283.829336375},{"date":"2025-02-01","value":31330796.08830575},{"date":"2025-03-01","value":16361113.857007042},{"date":"2025-04-01","value":11978116.387775997},{"date":"2025-05-01","value":10358765.817331264},{"date":"2025-06-01","value":10541626.770224292},{"date":"2025-07-01","value":15608244.920678714},{"date":"2025-08-01","value":20008824.663949687},{"date":"2025-09-01","value":28863285.82000883}],"ca":{"COVID-19":[{"date":"2023-03-27","pct":22.1},{"date":"2023-04-03","pct":30.0},{"date":"2023-04-10","pct":15.6},{"date":"2023-04-17","pct":19.5},{"date":"2023-04-24","pct":39.4},{"date":"2023-05-01","pct":31.6},{"date":"2023-05-08","pct":24.3},{"date":"2023-05-15","pct":35.9},{"date":"2023-05-22","pct":32.0},{"date":"2023-05-29","pct":48.6},{"date":"2023-06-05","pct":15.2},{"date":"2023-06-12","pct":15.9},{"date":"2023-06-19","pct":37.7},{"date":"2023-06-26","pct":22.0},{"date":"2023-07-03","pct":23.2},{"date":"2023-07-10","pct":18.6},{"date":"2023-07-17","pct":23.3},{"date":"2023-07-24","pct":18.7},{"date":"2023-07-31","pct":26.0},{"date":"2023-08-07","pct":31.7},{"date":"2023-08-14","pct":51.2},{"date":"2023-08-21","pct":35.6},{"date":"2023-08-28","pct":60.6},{"date":"2023-09-04","pct":34.5},{"date":"2023-09-11","pct":42.4},{"date":"2023-09-18","pct":29.8},{"date":"2023-09-25","pct":26.7},{"date":"2023-10-02","pct":24.9},{"date":"2023-10-09","pct":25.0},{"date":"2023-10-16","pct":24.3},{"date":"2023-10-23","pct":25.5},{"date":"2023-10-30","pct":20.5},{"date":"2023-11-06","pct":25.1},{"date":"2023-11-13","pct":43.6},{"date":"2023-11-20","pct":33.2},{"date":"2023-11-27","pct":42.6},{"date":"2023-12-04","pct":47.2},{"date":"2023-12-11","pct":47.4},{"date":"2023-12-18","pct":87.7},{"date":"2023-12-25","pct":79.8},{"date":"2024-01-01","pct":92.5},{"date":"2024-01-08","pct":59.2},{"date":"2024-01-15","pct":100.0},{"date":"2024-01-22","pct":56.7},{"date":"2024-01-29","pct":39.6},{"date":"2024-02-05","pct":25.2},{"date":"2024-02-12","pct":30.7},{"date":"2024-02-19","pct":16.0},{"date":"2024-02-26","pct":19.1},{"date":"2024-03-04","pct":13.8},{"date":"2024-03-11","pct":13.4},{"date":"2024-03-18","pct":13.4},{"date":"2024-03-25","pct":10.1},{"date":"2024-04-01","pct":10.8},{"date":"2024-04-08","pct":11.3},{"date":"2024-04-15","pct":10.0},{"date":"2024-04-22","pct":7.1},{"date":"2024-04-29","pct":9.4},{"date":"2024-05-06","pct":8.7},{"date":"2024-05-13","pct":10.2},{"date":"2024-05-20","pct":15.4},{"date":"2024-05-27","pct":22.0},{"date":"2024-06-03","pct":18.6},{"date":"2024-06-10","pct":38.2},{"date":"2024-06-17","pct":42.1},{"date":"2024-06-24","pct":40.5},{"date":"2024-07-01","pct":31.3},{"date":"2024-07-08","pct":29.4},{"date":"2024-07-15","pct":42.8},{"date":"2024-07-22","pct":68.6},{"date":"2024-07-29","pct":72.3},{"date":"2024-08-05","pct":59.7},{"date":"2024-08-12","pct":50.0},{"date":"2024-08-19","pct":78.8},{"date":"2024-08-26","pct":63.7},{"date":"2024-09-02","pct":40.7},{"date":"2024-09-09","pct":29.6},{"date":"2024-09-16","pct":24.6},{"date":"2024-09-23","pct":13.6},{"date":"2024-09-30","pct":16.1},{"date":"2024-10-07","pct":8.3},{"date":"2024-10-14","pct":5.2},{"date":"2024-10-21","pct":7.2},{"date":"2024-10-28","pct":7.5},{"date":"2024-11-04","pct":5.0},{"date":"2024-11-11","pct":4.3},{"date":"2024-11-18","pct":6.0},{"date":"2024-11-25","pct":4.9},{"date":"2024-12-02","pct":10.3},{"date":"2024-12-09","pct":10.0},{"date":"2024-12-16","pct":8.8},{"date":"2024-12-23","pct":9.9},{"date":"2024-12-30","pct":10.8},{"date":"2025-01-06","pct":8.3},{"date":"2025-01-13","pct":17.2},{"date":"2025-01-20","pct":9.3},{"date":"2025-01-27","pct":12.0},{"date":"2025-02-03","pct":5.4},{"date":"2025-02-10","pct":5.5},{"date":"2025-02-17","pct":5.9},{"date":"2025-02-24","pct":12.6},{"date":"2025-03-03","pct":7.4},{"date":"2025-03-10","pct":6.2},{"date":"2025-03-17","pct":6.0},{"date":"2025-03-24","pct":8.4},{"date":"2025-03-31","pct":6.9},{"date":"2025-04-07","pct":3.9},{"date":"2025-04-14","pct":5.2},{"date":"2025-04-21","pct":8.9},{"date":"2025-04-28","pct":7.6},{"date":"2025-05-05","pct":10.2},{"date":"2025-05-12","pct":9.8},{"date":"2025-05-19","pct":10.9},{"date":"2025-05-26","pct":11.6},{"date":"2025-06-02","pct":10.7},{"date":"2025-06-09","pct":11.6},{"date":"2025-06-16","pct":17.2},{"date":"2025-06-23","pct":15.8},{"date":"2025-06-30","pct":11.9},{"date":"2025-07-07","pct":16.1},{"date":"2025-07-14","pct":20.3},{"date":"2025-07-21","pct":30.1},{"date":"2025-07-28","pct":23.8},{"date":"2025-08-04","pct":30.9},{"date":"2025-08-11","pct":40.7},{"date":"2025-08-18","pct":45.4},{"date":"2025-08-25","pct":50.9},{"date":"2025-09-01","pct":55.0},{"date":"2025-09-08","pct":47.6},{"date":"2025-09-15","pct":36.4},{"date":"2025-09-22","pct":21.0},{"date":"2025-09-29","pct":17.7},{"date":"2025-10-06","pct":9.9},{"date":"2025-10-13","pct":8.7},{"date":"2025-10-20","pct":8.6},{"date":"2025-10-27","pct":8.0},{"date":"2025-11-03","pct":3.5},{"date":"2025-11-10","pct":2.5},{"date":"2025-11-17","pct":1.5},{"date":"2025-11-24","pct":2.1},{"date":"2025-12-01","pct":1.9},{"date":"2025-12-08","pct":2.5},{"date":"2025-12-15","pct":2.0},{"date":"2025-12-22","pct":1.8},{"date":"2025-12-29","pct":1.7},{"date":"2026-01-05","pct":2.3},{"date":"2026-01-12","pct":1.7},{"date":"2026-01-19","pct":1.3},{"date":"2026-01-26","pct":2.0},{"date":"2026-02-02","pct":3.0},{"date":"2026-02-09","pct":1.7},{"date":"2026-02-16","pct":1.6},{"date":"2026-02-23","pct":1.4},{"date":"2026-03-02","pct":2.2},{"date":"2026-03-09","pct":1.2},{"date":"2026-03-16","pct":1.6},{"date":"2026-03-23","pct":0.9},{"date":"2026-03-30","pct":1.5},{"date":"2026-04-06","pct":1.0},{"date":"2026-04-13","pct":1.0},{"date":"2026-04-20","pct":1.2},{"date":"2026-04-27","pct":1.1},{"date":"2026-05-04","pct":0.7},{"date":"2026-05-11","pct":0.6},{"date":"2026-05-18","pct":1.1},{"date":"2026-05-25","pct":1.8},{"date":"2026-06-01","pct":1.7},{"date":"2026-06-08","pct":1.5},{"date":"2026-06-15","pct":2.2},{"date":"2026-06-22","pct":1.3},{"date":"2026-06-29","pct":3.3},{"date":"2026-07-06","pct":5.3},{"date":"2026-07-13","pct":5.1},{"date":"2026-07-20","pct":4.0},{"date":"2026-07-27","pct":5.2},{"date":"2026-08-03","pct":8.8},{"date":"2026-08-10","pct":6.9}],"Flu A":[{"date":"2023-04-03","pct":0.0},{"date":"2023-04-10","pct":0.0},{"date":"2023-04-17","pct":0.0},{"date":"2023-04-24","pct":0.0},{"date":"2023-05-01","pct":0.0},{"date":"2023-05-08","pct":0.0},{"date":"2023-05-15","pct":0.0},{"date":"2023-05-22","pct":0.0},{"date":"2023-05-29","pct":0.0},{"date":"2023-06-05","pct":0.0},{"date":"2023-06-12","pct":9.1},{"date":"2023-06-19","pct":0.0},{"date":"2023-06-26","pct":0.0},{"date":"2023-07-03","pct":0.0},{"date":"2023-07-10","pct":0.0},{"date":"2023-07-17","pct":0.0},{"date":"2023-07-24","pct":0.0},{"date":"2023-07-31","pct":0.0},{"date":"2023-08-07","pct":0.0},{"date":"2023-08-14","pct":0.0},{"date":"2023-08-21","pct":0.0},{"date":"2023-08-28","pct":0.0},{"date":"2023-09-04","pct":0.0},{"date":"2023-09-11","pct":0.0},{"date":"2023-09-18","pct":0.0},{"date":"2023-09-25","pct":0.0},{"date":"2023-10-02","pct":0.0},{"date":"2023-10-09","pct":0.0},{"date":"2023-10-16","pct":0.0},{"date":"2023-10-23","pct":0.0},{"date":"2023-10-30","pct":0.0},{"date":"2023-11-06","pct":1.7},{"date":"2023-11-13","pct":5.0},{"date":"2023-11-20","pct":7.3},{"date":"2023-11-27","pct":14.0},{"date":"2023-12-04","pct":37.0},{"date":"2023-12-11","pct":29.2},{"date":"2023-12-18","pct":49.7},{"date":"2023-12-25","pct":100.0},{"date":"2024-01-01","pct":36.5},{"date":"2024-01-08","pct":22.3},{"date":"2024-01-15","pct":29.2},{"date":"2024-01-22","pct":14.4},{"date":"2024-01-29","pct":10.0},{"date":"2024-02-05","pct":11.0},{"date":"2024-02-12","pct":5.4},{"date":"2024-02-19","pct":4.4},{"date":"2024-02-26","pct":3.4},{"date":"2024-03-04","pct":3.6},{"date":"2024-03-11","pct":2.9},{"date":"2024-03-18","pct":0.0},{"date":"2024-03-25","pct":0.0},{"date":"2024-04-01","pct":2.7},{"date":"2024-04-08","pct":0.0},{"date":"2024-04-15","pct":0.0},{"date":"2024-04-22","pct":0.0},{"date":"2024-04-29","pct":0.0},{"date":"2024-05-06","pct":0.0},{"date":"2024-05-13","pct":0.0},{"date":"2024-05-20","pct":0.0},{"date":"2024-05-27","pct":2.9},{"date":"2024-06-03","pct":0.0},{"date":"2024-06-10","pct":2.7},{"date":"2024-06-17","pct":1.4},{"date":"2024-06-24","pct":2.4},{"date":"2024-07-01","pct":0.0},{"date":"2024-07-08","pct":0.0},{"date":"2024-07-15","pct":0.0},{"date":"2024-07-22","pct":0.0},{"date":"2024-07-29","pct":0.0},{"date":"2024-08-05","pct":0.0},{"date":"2024-08-12","pct":0.0},{"date":"2024-08-19","pct":0.0},{"date":"2024-08-26","pct":0.0},{"date":"2024-09-02","pct":0.0},{"date":"2024-09-09","pct":0.0},{"date":"2024-09-16","pct":0.0},{"date":"2024-09-23","pct":0.0},{"date":"2024-09-30","pct":0.0},{"date":"2024-10-07","pct":0.0},{"date":"2024-10-14","pct":0.0},{"date":"2024-10-21","pct":1.0},{"date":"2024-10-28","pct":3.7},{"date":"2024-11-04","pct":4.2},{"date":"2024-11-11","pct":12.1},{"date":"2024-11-18","pct":14.8},{"date":"2024-11-25","pct":16.1},{"date":"2024-12-02","pct":29.4},{"date":"2024-12-09","pct":51.7},{"date":"2024-12-16","pct":35.5},{"date":"2024-12-23","pct":59.7},{"date":"2024-12-30","pct":72.0},{"date":"2025-01-06","pct":60.1},{"date":"2025-01-13","pct":70.0},{"date":"2025-01-20","pct":61.1},{"date":"2025-01-27","pct":93.8},{"date":"2025-02-03","pct":31.2},{"date":"2025-02-10","pct":19.4},{"date":"2025-02-17","pct":16.8},{"date":"2025-02-24","pct":25.9},{"date":"2025-03-03","pct":13.7},{"date":"2025-03-10","pct":7.6},{"date":"2025-03-17","pct":5.6},{"date":"2025-03-24","pct":4.9},{"date":"2025-03-31","pct":1.8},{"date":"2025-04-07","pct":1.1},{"date":"2025-04-14","pct":2.6},{"date":"2025-04-21","pct":0.0},{"date":"2025-04-28","pct":1.6},{"date":"2025-05-05","pct":1.7},{"date":"2025-05-12","pct":0.0},{"date":"2025-05-19","pct":0.0},{"date":"2025-05-26","pct":0.0},{"date":"2025-06-02","pct":0.0},{"date":"2025-06-09","pct":0.0},{"date":"2025-06-16","pct":0.0},{"date":"2025-06-23","pct":0.0},{"date":"2025-06-30","pct":0.0},{"date":"2025-07-07","pct":0.0},{"date":"2025-07-14","pct":0.0},{"date":"2025-07-21","pct":0.0},{"date":"2025-07-28","pct":0.0},{"date":"2025-08-04","pct":0.0},{"date":"2025-08-11","pct":0.0},{"date":"2025-08-18","pct":0.0},{"date":"2025-08-25","pct":0.0},{"date":"2025-09-01","pct":0.0},{"date":"2025-09-08","pct":1.0},{"date":"2025-09-15","pct":0.0},{"date":"2025-09-22","pct":0.0},{"date":"2025-09-29","pct":0.0},{"date":"2025-10-06","pct":0.0},{"date":"2025-10-13","pct":0.0},{"date":"2025-10-20","pct":0.0},{"date":"2025-10-27","pct":0.0},{"date":"2025-11-03","pct":0.0},{"date":"2025-11-10","pct":0.0},{"date":"2025-11-17","pct":0.0},{"date":"2025-11-24","pct":2.3},{"date":"2025-12-01","pct":3.0},{"date":"2025-12-08","pct":1.8},{"date":"2025-12-15","pct":18.7},{"date":"2025-12-22","pct":25.1},{"date":"2025-12-29","pct":24.0},{"date":"2026-01-05","pct":27.8},{"date":"2026-01-12","pct":24.2},{"date":"2026-01-19","pct":37.3},{"date":"2026-01-26","pct":24.2},{"date":"2026-02-02","pct":47.4},{"date":"2026-02-09","pct":31.6},{"date":"2026-02-16","pct":23.6},{"date":"2026-02-23","pct":16.0},{"date":"2026-03-02","pct":10.9},{"date":"2026-03-09","pct":12.6},{"date":"2026-03-16","pct":7.3},{"date":"2026-03-23","pct":2.5},{"date":"2026-03-30","pct":1.2},{"date":"2026-04-06","pct":0.0},{"date":"2026-04-13","pct":0.0},{"date":"2026-04-20","pct":0.0},{"date":"2026-04-27","pct":0.0},{"date":"2026-05-04","pct":0.0},{"date":"2026-05-11","pct":0.0},{"date":"2026-05-18","pct":0.0},{"date":"2026-05-25","pct":0.0},{"date":"2026-06-01","pct":0.0},{"date":"2026-06-08","pct":0.0},{"date":"2026-06-15","pct":0.0},{"date":"2026-06-22","pct":0.0},{"date":"2026-06-29","pct":0.0},{"date":"2026-07-06","pct":0.0},{"date":"2026-07-13","pct":0.0},{"date":"2026-07-20","pct":0.0},{"date":"2026-07-27","pct":0.0},{"date":"2026-08-03","pct":0.0},{"date":"2026-08-10","pct":0.0}],"RSV":[{"date":"2023-04-03","pct":2.1},{"date":"2023-04-10","pct":2.0},{"date":"2023-04-17","pct":0.0},{"date":"2023-04-24","pct":0.0},{"date":"2023-05-01","pct":0.0},{"date":"2023-05-08","pct":4.8},{"date":"2023-05-15","pct":0.0},{"date":"2023-05-22","pct":2.4},{"date":"2023-05-29","pct":0.0},{"date":"2023-06-05","pct":0.0},{"date":"2023-06-12","pct":0.0},{"date":"2023-06-19","pct":0.0},{"date":"2023-06-26","pct":0.0},{"date":"2023-07-03","pct":2.2},{"date":"2023-07-10","pct":0.0},{"date":"2023-07-17","pct":0.0},{"date":"2023-07-24","pct":0.0},{"date":"2023-07-31","pct":0.0},{"date":"2023-08-07","pct":0.0},{"date":"2023-08-14","pct":0.0},{"date":"2023-08-21","pct":0.0},{"date":"2023-08-28","pct":0.0},{"date":"2023-09-04","pct":0.0},{"date":"2023-09-11","pct":0.0},{"date":"2023-09-18","pct":0.0},{"date":"2023-09-25","pct":0.0},{"date":"2023-10-02","pct":0.0},{"date":"2023-10-09","pct":3.9},{"date":"2023-10-16","pct":3.1},{"date":"2023-10-23","pct":9.4},{"date":"2023-10-30","pct":17.5},{"date":"2023-11-06","pct":17.9},{"date":"2023-11-13","pct":37.2},{"date":"2023-11-20","pct":35.3},{"date":"2023-11-27","pct":43.9},{"date":"2023-12-04","pct":47.4},{"date":"2023-12-11","pct":78.6},{"date":"2023-12-18","pct":85.8},{"date":"2023-12-25","pct":71.2},{"date":"2024-01-01","pct":100.0},{"date":"2024-01-08","pct":57.4},{"date":"2024-01-15","pct":46.4},{"date":"2024-01-22","pct":18.9},{"date":"2024-01-29","pct":22.2},{"date":"2024-02-05","pct":22.6},{"date":"2024-02-12","pct":27.9},{"date":"2024-02-19","pct":12.3},{"date":"2024-02-26","pct":10.8},{"date":"2024-03-04","pct":7.8},{"date":"2024-03-11","pct":7.0},{"date":"2024-03-18","pct":3.1},{"date":"2024-03-25","pct":3.2},{"date":"2024-04-01","pct":4.2},{"date":"2024-04-08","pct":2.2},{"date":"2024-04-15","pct":0.9},{"date":"2024-04-22","pct":2.2},{"date":"2024-04-29","pct":0.0},{"date":"2024-05-06","pct":0.0},{"date":"2024-05-13","pct":0.0},{"date":"2024-05-20","pct":0.0},{"date":"2024-05-27","pct":0.0},{"date":"2024-06-03","pct":0.0},{"date":"2024-06-10","pct":0.0},{"date":"2024-06-17","pct":0.0},{"date":"2024-06-24","pct":0.0},{"date":"2024-07-01","pct":0.0},{"date":"2024-07-08","pct":0.0},{"date":"2024-07-15","pct":0.0},{"date":"2024-07-22","pct":0.0},{"date":"2024-07-29","pct":0.0},{"date":"2024-08-05","pct":0.0},{"date":"2024-08-12","pct":0.0},{"date":"2024-08-19","pct":0.0},{"date":"2024-08-26","pct":0.0},{"date":"2024-09-02","pct":0.0},{"date":"2024-09-09","pct":0.0},{"date":"2024-09-16","pct":0.0},{"date":"2024-09-23","pct":0.0},{"date":"2024-09-30","pct":0.0},{"date":"2024-10-07","pct":0.0},{"date":"2024-10-14","pct":0.0},{"date":"2024-10-21","pct":0.0},{"date":"2024-10-28","pct":0.0},{"date":"2024-11-04","pct":1.4},{"date":"2024-11-11","pct":0.0},{"date":"2024-11-18","pct":2.8},{"date":"2024-11-25","pct":6.9},{"date":"2024-12-02","pct":19.6},{"date":"2024-12-09","pct":27.1},{"date":"2024-12-16","pct":17.2},{"date":"2024-12-23","pct":25.5},{"date":"2024-12-30","pct":40.9},{"date":"2025-01-06","pct":40.3},{"date":"2025-01-13","pct":42.7},{"date":"2025-01-20","pct":52.6},{"date":"2025-01-27","pct":54.2},{"date":"2025-02-03","pct":44.1},{"date":"2025-02-10","pct":25.8},{"date":"2025-02-17","pct":24.3},{"date":"2025-02-24","pct":36.5},{"date":"2025-03-03","pct":24.8},{"date":"2025-03-10","pct":15.3},{"date":"2025-03-17","pct":17.0},{"date":"2025-03-24","pct":13.7},{"date":"2025-03-31","pct":7.9},{"date":"2025-04-07","pct":5.9},{"date":"2025-04-14","pct":3.5},{"date":"2025-04-21","pct":2.7},{"date":"2025-04-28","pct":1.5},{"date":"2025-05-05","pct":1.3},{"date":"2025-05-12","pct":1.5},{"date":"2025-05-19","pct":1.2},{"date":"2025-05-26","pct":1.3},{"date":"2025-06-02","pct":0.0},{"date":"2025-06-09","pct":0.0},{"date":"2025-06-16","pct":0.0},{"date":"2025-06-23","pct":0.0},{"date":"2025-06-30","pct":0.0},{"date":"2025-07-07","pct":0.0},{"date":"2025-07-14","pct":0.0},{"date":"2025-07-21","pct":0.0},{"date":"2025-07-28","pct":0.0},{"date":"2025-08-04","pct":0.0},{"date":"2025-08-11","pct":0.0},{"date":"2025-08-18","pct":0.0},{"date":"2025-08-25","pct":0.0},{"date":"2025-09-01","pct":0.0},{"date":"2025-09-08","pct":0.0},{"date":"2025-09-15","pct":0.0},{"date":"2025-09-22","pct":0.0},{"date":"2025-09-29","pct":0.0},{"date":"2025-10-06","pct":0.0},{"date":"2025-10-13","pct":0.0},{"date":"2025-10-20","pct":0.0},{"date":"2025-10-27","pct":1.5},{"date":"2025-11-03","pct":0.0},{"date":"2025-11-10","pct":0.7},{"date":"2025-11-17","pct":0.9},{"date":"2025-11-24","pct":4.3},{"date":"2025-12-01","pct":7.5},{"date":"2025-12-08","pct":5.1},{"date":"2025-12-15","pct":5.8},{"date":"2025-12-22","pct":3.9},{"date":"2025-12-29","pct":10.6},{"date":"2026-01-05","pct":14.7},{"date":"2026-01-12","pct":17.3},{"date":"2026-01-19","pct":16.5},{"date":"2026-01-26","pct":17.5},{"date":"2026-02-02","pct":22.1},{"date":"2026-02-09","pct":25.2},{"date":"2026-02-16","pct":22.9},{"date":"2026-02-23","pct":22.2},{"date":"2026-03-02","pct":22.0},{"date":"2026-03-09","pct":15.6},{"date":"2026-03-16","pct":22.6},{"date":"2026-03-23","pct":17.9},{"date":"2026-03-30","pct":12.1},{"date":"2026-04-06","pct":7.0},{"date":"2026-04-13","pct":6.1},{"date":"2026-04-20","pct":5.7},{"date":"2026-04-27","pct":3.3},{"date":"2026-05-04","pct":1.8},{"date":"2026-05-11","pct":1.2},{"date":"2026-05-18","pct":0.7},{"date":"2026-05-25","pct":0.0},{"date":"2026-06-01","pct":0.0},{"date":"2026-06-08","pct":0.0},{"date":"2026-06-15","pct":0.0},{"date":"2026-06-22","pct":0.0},{"date":"2026-06-29","pct":0.0},{"date":"2026-07-06","pct":0.0},{"date":"2026-07-13","pct":0.0},{"date":"2026-07-20","pct":0.0},{"date":"2026-07-27","pct":0.0},{"date":"2026-08-03","pct":0.0},{"date":"2026-08-10","pct":0.0}],"Bird Flu (H5)":[{"date":"2024-11-18","pct":50.7},{"date":"2024-11-25","pct":59.5},{"date":"2024-12-02","pct":61.2},{"date":"2024-12-09","pct":87.8},{"date":"2024-12-16","pct":100.0},{"date":"2024-12-23","pct":0.0},{"date":"2024-12-30","pct":42.6},{"date":"2025-01-06","pct":48.6},{"date":"2025-01-13","pct":72.1},{"date":"2025-01-20","pct":33.4},{"date":"2025-01-27","pct":0.0},{"date":"2025-02-03","pct":0.0},{"date":"2025-02-10","pct":0.0},{"date":"2025-02-17","pct":0.0},{"date":"2025-02-24","pct":0.0},{"date":"2025-03-03","pct":0.0},{"date":"2025-03-10","pct":0.0},{"date":"2025-03-17","pct":0.0},{"date":"2025-03-24","pct":0.0},{"date":"2025-03-31","pct":0.0},{"date":"2025-04-07","pct":0.0},{"date":"2025-04-14","pct":0.0},{"date":"2025-04-21","pct":0.0},{"date":"2025-04-28","pct":0.0},{"date":"2025-05-05","pct":0.0},{"date":"2025-05-12","pct":0.0},{"date":"2025-05-19","pct":0.0},{"date":"2025-05-26","pct":0.0},{"date":"2025-06-02","pct":0.0},{"date":"2025-06-09","pct":0.0},{"date":"2025-06-16","pct":0.0},{"date":"2025-06-23","pct":0.0},{"date":"2025-06-30","pct":0.0},{"date":"2025-07-07","pct":0.0},{"date":"2025-07-14","pct":0.0},{"date":"2025-07-21","pct":0.0},{"date":"2025-07-28","pct":0.0},{"date":"2025-08-04","pct":0.0},{"date":"2025-08-11","pct":0.0},{"date":"2025-08-18","pct":0.0},{"date":"2025-08-25","pct":0.0},{"date":"2025-09-01","pct":0.0},{"date":"2025-09-08","pct":0.0},{"date":"2025-09-15","pct":0.0},{"date":"2025-09-22","pct":0.0},{"date":"2025-09-29","pct":0.0},{"date":"2025-10-06","pct":0.0},{"date":"2025-10-13","pct":0.0},{"date":"2025-10-20","pct":0.0},{"date":"2025-10-27","pct":0.0},{"date":"2025-11-03","pct":0.0},{"date":"2025-11-10","pct":0.0},{"date":"2025-11-17","pct":0.0},{"date":"2025-11-24","pct":0.0},{"date":"2025-12-01","pct":0.0},{"date":"2025-12-08","pct":0.0},{"date":"2025-12-15","pct":0.0},{"date":"2025-12-22","pct":0.0},{"date":"2025-12-29","pct":0.0},{"date":"2026-01-05","pct":0.0},{"date":"2026-01-12","pct":0.0},{"date":"2026-01-19","pct":0.0},{"date":"2026-01-26","pct":0.0},{"date":"2026-02-02","pct":0.0},{"date":"2026-02-09","pct":0.0},{"date":"2026-02-16","pct":0.0},{"date":"2026-02-23","pct":0.0},{"date":"2026-03-02","pct":0.0},{"date":"2026-03-09","pct":0.0},{"date":"2026-03-16","pct":0.0},{"date":"2026-03-23","pct":0.0},{"date":"2026-03-30","pct":0.0},{"date":"2026-04-06","pct":0.0},{"date":"2026-04-13","pct":0.0},{"date":"2026-04-20","pct":0.0},{"date":"2026-04-27","pct":0.0},{"date":"2026-05-04","pct":0.0},{"date":"2026-05-11","pct":0.0},{"date":"2026-05-18","pct":0.0},{"date":"2026-05-25","pct":0.0},{"date":"2026-06-01","pct":0.0},{"date":"2026-06-08","pct":0.0},{"date":"2026-06-15","pct":0.0},{"date":"2026-06-22","pct":0.0},{"date":"2026-06-29","pct":0.0},{"date":"2026-07-06","pct":0.0},{"date":"2026-07-13","pct":0.0},{"date":"2026-07-20","pct":0.0},{"date":"2026-07-27","pct":0.0},{"date":"2026-08-03","pct":0.0},{"date":"2026-08-10","pct":0.0}]}};
+
+/* === PATHOGEN CONFIG === */
+const PATHOGENS = [
+  { key: 'COVID-19',      cssVar: '--c1' },
+  { key: 'Flu A',         cssVar: '--c2' },
+  { key: 'RSV',           cssVar: '--c3' },
+  { key: 'Bird Flu (H5)', cssVar: '--c4' },
+];
+
+/* === HELPERS === */
+const NS = 'http://www.w3.org/2000/svg';
+const svgEl = (tag, attrs) => {
+  const e = document.createElementNS(NS, tag);
+  if (attrs) for (const [k,v] of Object.entries(attrs)) e.setAttribute(k, String(v));
+  return e;
+};
+
+const css = varName => getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+
+function fmtMonth(s) {
+  return new Date(s + 'T12:00:00').toLocaleString('en-US', { month: 'short', year: 'numeric' });
+}
+function fmtWeek(s) {
+  return new Date(s + 'T12:00:00').toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+function fmtConc(v) {
+  if (v >= 1e8) return (v/1e6).toFixed(0) + 'M copies/L';
+  if (v >= 1e6) return (v/1e6).toFixed(1) + 'M copies/L';
+  if (v >= 1e3) return (v/1e3).toFixed(0) + 'k copies/L';
+  return v.toFixed(0) + ' copies/L';
+}
+function statusLabel(pct, dateStr) {
+  const when = new Date(dateStr + 'T12:00:00').toLocaleString('en-US', { month: 'short', year: 'numeric' });
+  const level = pct === 0 ? 'None detected'
+    : pct < 10  ? 'Very low'
+    : pct < 30  ? 'Low'
+    : pct < 60  ? 'Moderate'
+    : pct < 85  ? 'High'
+    : 'Very high';
+  return (pct === 0 ? level : level + ' · ' + pct + '%') + ' as of ' + when;
+}
+
+/* === TOOLTIP === */
+const tip = document.getElementById('tip');
+function showTip(cx, cy, label, value) {
+  while (tip.firstChild) tip.removeChild(tip.firstChild);
+  const strong = document.createElement('strong');
+  strong.textContent = label;
+  tip.appendChild(strong);
+  tip.appendChild(document.createElement('br'));
+  tip.appendChild(document.createTextNode(value));
+  tip.style.opacity = '1';
+  const tx = Math.min(cx + 14, window.innerWidth - tip.offsetWidth - 6);
+  const ty = Math.max(cy - tip.offsetHeight - 10, 6);
+  tip.style.left = tx + 'px';
+  tip.style.top  = ty + 'px';
+}
+function hideTip() { tip.style.opacity = '0'; }
+
+/* === CHART ENGINE === */
+function buildChart(svg, pts, { W=820, H=265, pT=50, pR=24, pB=42, pL=64,
+                                 color, fillOp=0.11, yFmt, tipFmt,
+                                 gridN=4, annos=[] }) {
+  const iW = W - pL - pR, iH = H - pT - pB;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const ts  = pts.map(p => new Date(p.date + 'T12:00:00').getTime());
+  const vs  = pts.map(p => p.value !== undefined ? p.value : p.pct);
+  const t0  = ts.reduce((a, b) => Math.min(a, b));
+  const t1  = ts.reduce((a, b) => Math.max(a, b));
+  const vMax = vs.reduce((a, b) => Math.max(a, b)) * 1.1;
+
+  const xS = t => pL + (t - t0) / (t1 - t0) * iW;
+  const yS = v => pT + iH * (1 - v / vMax);
+
+  /* grid + y-labels */
+  for (let i = 0; i <= gridN; i++) {
+    const y = pT + iH / gridN * i;
+    const v = vMax * (1 - i / gridN);
+    svg.appendChild(svgEl('line', { x1:pL, x2:pL+iW, y1:y, y2:y, stroke:'var(--grid)', 'stroke-width':1 }));
+    if (i < gridN) {
+      const t = svgEl('text', { x:pL-7, y:y+4, 'text-anchor':'end', 'font-size':11,
+                                fill:'var(--axis)', 'font-family':'DM Sans,system-ui,sans-serif' });
+      t.textContent = yFmt(v);
+      svg.appendChild(t);
+    }
+  }
+
+  /* x-axis year ticks */
+  const y0 = new Date(t0).getFullYear(), y1 = new Date(t1).getFullYear();
+  for (let yr = y0; yr <= y1; yr++) {
+    const tx = new Date(yr, 0, 1).getTime();
+    if (tx < t0 || tx > t1) continue;
+    const x = xS(tx);
+    svg.appendChild(svgEl('line', { x1:x, x2:x, y1:pT+iH, y2:pT+iH+5, stroke:'var(--axis)', 'stroke-width':1 }));
+    const yt = svgEl('text', { x, y:pT+iH+18, 'text-anchor':'middle', 'font-size':11,
+                               fill:'var(--axis)', 'font-family':'DM Sans,system-ui,sans-serif' });
+    yt.textContent = yr;
+    svg.appendChild(yt);
+  }
+
+  /* computed points — carry pre-computed timestamp to avoid Date construction in inner loops */
+  const cpts = pts.map((p, i) => ({ x: xS(ts[i]), y: yS(vs[i]), t: ts[i], raw: p }));
+
+  /* area */
+  const aD = `M${cpts[0].x},${pT+iH} ` + cpts.map(p=>`L${p.x},${p.y}`).join(' ') + ` L${cpts[cpts.length-1].x},${pT+iH}Z`;
+  svg.appendChild(svgEl('path', { d:aD, fill:color, 'fill-opacity':fillOp }));
+
+  /* line */
+  const lD = `M${cpts[0].x},${cpts[0].y} ` + cpts.slice(1).map(p=>`L${p.x},${p.y}`).join(' ');
+  svg.appendChild(svgEl('path', { d:lD, fill:'none', stroke:color, 'stroke-width':2,
+                                   'stroke-linejoin':'round', 'stroke-linecap':'round' }));
+
+  /* annotations */
+  for (const ann of annos) {
+    const at = new Date(ann.date + 'T12:00:00').getTime();
+    let near = cpts[0], nd = Infinity;
+    cpts.forEach(p => { const d = Math.abs(p.t - at); if(d<nd){nd=d;near=p;} });
+    const lx = near.x + (ann.dx||0);
+    const ly = near.y - 26;
+    svg.appendChild(svgEl('line', { x1:near.x, x2:near.x, y1:near.y-5, y2:near.y-18,
+                                     stroke:'var(--anno)', 'stroke-width':1, 'stroke-dasharray':'3 2' }));
+    const at2 = svgEl('text', { x:lx, y:ly, 'text-anchor': ann.anchor||'middle', 'font-size':10,
+                                fill:'var(--anno)', 'font-family':'DM Sans,system-ui,sans-serif',
+                                'font-weight':500 });
+    at2.textContent = ann.label;
+    svg.appendChild(at2);
+  }
+
+  /* hover layer */
+  const hLine = svgEl('line', { stroke:'var(--anno)', 'stroke-width':1, 'stroke-dasharray':'4 3',
+                                 y1:pT, y2:pT+iH, visibility:'hidden' });
+  const hDot  = svgEl('circle', { r:5, fill:color, stroke:'var(--surface)', 'stroke-width':2, visibility:'hidden' });
+  const hit   = svgEl('rect', { x:pL, y:pT, width:iW, height:iH, fill:'transparent', style:'cursor:crosshair' });
+  svg.appendChild(hLine); svg.appendChild(hDot); svg.appendChild(hit);
+
+  hit.addEventListener('mousemove', e => {
+    const r = svg.getBoundingClientRect();
+    const mx = ((e.clientX - r.left) / r.width) * W;
+    let near = cpts[0], nd = Infinity;
+    cpts.forEach(p => { const d = Math.abs(p.x - mx); if(d<nd){nd=d;near=p;} });
+    hLine.setAttribute('x1', near.x); hLine.setAttribute('x2', near.x); hLine.setAttribute('visibility','visible');
+    hDot.setAttribute('cx', near.x);  hDot.setAttribute('cy', near.y);  hDot.setAttribute('visibility','visible');
+    const t = tipFmt(near.raw); showTip(e.clientX, e.clientY, t.label, t.value);
+  }, { passive: true });
+  hit.addEventListener('mouseleave', () => {
+    hLine.setAttribute('visibility','hidden'); hDot.setAttribute('visibility','hidden'); hideTip();
+  }, { passive: true });
+}
+
+/* === RENDER COVID === */
+function renderCovid() {
+  const color = css('--c1');
+  buildChart(document.getElementById('covid-svg'), DATA.cdc, {
+    color,
+    yFmt: v => v < 1e3 ? '0' : v >= 1e8 ? (v/1e6).toFixed(0)+'M' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : (v/1e3).toFixed(0)+'k',
+    tipFmt: p => ({ label: fmtMonth(p.date), value: fmtConc(p.value) }),
+    annos: [
+      { date:'2021-08-01', label:'Delta',           anchor:'middle' },
+      { date:'2021-12-01', label:'Omicron peak',    anchor:'end',   dx:-6 },
+      { date:'2022-07-01', label:'BA.4 / BA.5',     anchor:'middle' },
+      { date:'2023-12-01', label:'JN.1',            anchor:'middle' },
+    ]
+  });
+}
+
+/* === RENDER PATHOGENS === */
+function renderPathogens() {
+  const grid = document.getElementById('pathogen-grid');
+  grid.innerHTML = '';
+
+  for (const ph of PATHOGENS) {
+    const series = DATA.ca[ph.key];
+    if (!series) continue;
+    const color  = css(ph.cssVar);
+    const lastPt = series[series.length - 1];
+
+    const card = document.createElement('div');
+    card.className = 'p-card';
+
+    const hdr = document.createElement('div');
+    hdr.className = 'p-header';
+
+    const nm = document.createElement('p');
+    nm.className = 'p-name';
+    nm.style.color = `var(${ph.cssVar})`;
+    nm.textContent = ph.key;
+
+    const st = document.createElement('p');
+    st.className = 'p-status';
+    st.textContent = statusLabel(lastPt.pct, lastPt.date);
+
+    hdr.appendChild(nm);
+    hdr.appendChild(st);
+    card.appendChild(hdr);
+
+    const svg = document.createElementNS(NS, 'svg');
+    svg.classList.add('p-svg');
+    card.appendChild(svg);
+    grid.appendChild(card);
+
+    buildChart(svg, series, {
+      W:380, H:130, pT:10, pL:38, pR:10, pB:32,
+      color, fillOp: 0.12,
+      yFmt: v => v <= 0 ? '0%' : Math.round(v)+'%',
+      tipFmt: p => ({ label: fmtWeek(p.date), value: p.pct + '% of recorded peak' }),
+      gridN: 2,
+      annos: []
+    });
+  }
+}
+
+/* === INIT === */
+document.addEventListener('DOMContentLoaded', () => {
+  renderCovid();
+  renderPathogens();
+});
+</script>
