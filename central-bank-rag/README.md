@@ -3,6 +3,8 @@
 A retrieval-augmented generation (RAG) system for querying central bank
 documents from the Federal Reserve and Bank of Canada.
 
+![Central Bank RAG app](rag-app-screenshot.png)
+
 ## What it does
 
 Ask natural language questions against a corpus of 82 central bank documents
