@@ -11,3 +11,4 @@ node_modules/
 # Generated data (Qdrant DB, TF-IDF pickle, downloaded XML)
 legislative-retrieval/data/
 central-bank-rag/data/
+legal-rag/data/
